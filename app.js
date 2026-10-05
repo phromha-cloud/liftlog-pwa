@@ -1,3 +1,4 @@
+import { barWeight, platesFor, totalFor, entryDefaults, workoutProgress, startRest, remainingRest, extendRest } from "./training.js";
 import {
   createInitialState, normalizeState, activeUser, activePlan, resolveDay, deletePlan,
   nextSetDefaults, previousWeekExercise, localDateKey, dateFromKey, uid, presetPlan,
@@ -54,6 +55,11 @@ const I18N = {
 };
 
 let state;
+let savedState;
+let busy = false;
+let updateRegistration;
+let pendingImport;
+const entryDrafts = new Map();
 let route = "today";
 let reportPeriod = "week";
 let reportAnchor = new Date();
@@ -76,9 +82,38 @@ const fmt = (n, max = 0) => new Intl.NumberFormat(lang() === "th" ? "th-TH" : "e
 const dateFmt = (date, opts = { weekday:"long", day:"numeric", month:"long" }) => new Intl.DateTimeFormat(lang() === "th" ? "th-TH" : "en-US", opts).format(date);
 
 async function persist(render = false) {
-  await saveState(state);
-  applyTheme();
-  if (render) draw();
+  const snapshot = structuredClone(state);
+  try {
+    await saveState(snapshot);
+    savedState = snapshot;
+    applyTheme();
+    if (render) draw();
+  } catch (error) {
+    state = structuredClone(savedState);
+    throw error;
+  }
+}
+const tr = (th, en) => lang() === 'th' ? th : en;
+const exerciseById = id => user().exercises.find(e => e.id === id);
+function loadLabel(total, bar = null) {
+  const side = bar === null ? null : platesFor(Number(total), bar);
+  return side === null ? `${fmt(total, 2)} ${t('kg')} ${tr('รวม', 'total')}` : `${fmt(side, 2)} ${tr('กก./ข้าง', 'kg/side')}`;
+}
+function restBanner() {
+  const timer = user().restTimer;
+  if (!timer || timer.sessionId !== user().activeSession?.id) return '';
+  return `<aside class="rest-banner" aria-label="${tr('พักระหว่างเซต','Rest between sets')}"><div><div class="eyebrow">${icon('history',15)} ${tr('พักระหว่างเซต','Rest between sets')}</div><div class="rest-time"><strong data-rest-time></strong><span>${escapeHTML(exerciseName(timer.exerciseId))}</span></div></div><div class="rest-actions"><button class="btn secondary" data-action="rest-extend">+30s</button><button class="btn ghost" data-action="rest-skip">${tr('ข้าม','Skip')}</button></div></aside>`;
+}
+function tickRest() {
+  const el = document.querySelector('[data-rest-time]');
+  if (!el) return;
+  const seconds = remainingRest(user().restTimer);
+  el.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  document.querySelector('[data-action="rest-skip"]').textContent = seconds ? tr('ข้าม','Skip') : tr('พร้อมแล้ว','Ready');
+}
+function trainingControls(session) {
+  const intensity = session?.intensity || user().defaultIntensity || 'moderate';
+  return `<div class="training-controls"><label>${tr('ความหนัก','Intensity')}<select data-training="intensity">${[['light',tr('เบา','Light')],['moderate',tr('ปานกลาง','Moderate')],['vigorous',tr('หนัก','Heavy')]].map(([k,v])=>`<option value="${k}" ${intensity===k?'selected':''}>${v}</option>`).join('')}</select></label><label>${tr('เวลาพัก','Rest')}<select data-training="rest">${[['off',tr('ปิด','Off')],['0',tr('อัตโนมัติ 60–90 วิ','Auto 60–90s')],['60','60s'],['90','90s']].map(([k,v])=>`<option value="${k}" ${(user().restAutomatic===false?'off':String(user().restDuration||0))===k?'selected':''}>${v}</option>`).join('')}</select></label></div>`;
 }
 
 function applyTheme() {
@@ -100,7 +135,9 @@ function icon(kind, size = 20) { return svgIcon(kind, size); }
 function shell(content) {
   const nav = ["today","plans","history","progress","settings"];
   return `<main class="shell">
-    <header class="topbar"><div class="brand"><div class="mark">L</div><strong>LiftLog</strong></div><button class="profile-chip" data-action="profiles">${escapeHTML(user().name)}⌄</button></header>
+    <header class="topbar"><div class="brand"><div class="mark">${icon("strength",24)}</div><strong>LiftLog</strong></div><button class="profile-chip" data-action="profiles">${icon("user",18)} <span>${escapeHTML(user().name)}</span> ${icon("chevron",14)}</button></header>
+    ${updateRegistration?.waiting ? `<div class="update-notice"><span>${tr("มีเวอร์ชันใหม่พร้อมใช้","An update is ready")}</span><button class="btn small-btn" data-action="apply-update">${tr("อัปเดต","Update")}</button></div>` : ""}
+    ${restBanner()}
     ${content}
     <nav class="bottom-nav" aria-label="Main">${nav.map(item => `<button data-route="${item}" class="${route===item?"active":""}"><span class="nav-icon">${icon(item,21)}</span><span>${t(item)}</span></button>`).join("")}</nav>
   </main>`;
@@ -111,14 +148,18 @@ function pageHead(title, eyebrow = "LiftLog", action = "") {
 }
 
 function renderToday() {
-  const now = new Date(); const resolved = resolveDay(user(), now); const plan = resolved.plan; const day = resolved.day;
+  const now = new Date(); const resolved = resolveDay(user(), now); const plan = resolved.plan; let day = resolved.day;
   const active = user().activeSession;
+  if(active) day = active.kind === "strength" ? {mode:"strength",exercises:active.planned||[]} : {mode:"cardio",cardio:active};
+  const progress = workoutProgress(active);
   let body = pageHead(t("today"), dateFmt(now), `<button class="icon-btn" data-action="edit-day" aria-label="${t("editDay")}">${icon("edit")}</button>`);
-  body += `<section class="card hero"><div class="hero-row"><div><div class="muted small">${t("currentPlan")}</div><h2>${escapeHTML(plan?.name || "—")}</h2></div><span class="pill">${icon(day.mode)} ${t(day.mode)}</span></div>
+  body += `<section class="card hero"><div class="hero-row"><div><div class="muted small">${t("currentPlan")}</div><h2>${escapeHTML(active?.planName || plan?.name || "—")}</h2></div><span class="pill">${icon(day.mode)} ${t(day.mode)}</span></div>
     ${resolved.overridden ? `<p class="small">${t("todayOnly")}</p>` : ""}
-    <div class="grid-2" style="margin-top:16px"><div class="metric"><b>${day.mode === "strength" ? (day.exercises?.length || 0) : day.mode === "cardio" ? (day.cardio?.minutes || 0) : "—"}</b><span>${day.mode === "strength" ? t("addExercise") : day.mode === "cardio" ? t("minutes") : t("rest")}</span></div><div class="metric"><b>${active ? elapsed(active.startedAt) : "—"}</b><span>${t("duration")}</span></div></div>
+    <div class="hero-summary"><div><strong>${active && day.mode==='strength' ? `${progress.completed}<span> / ${progress.target}</span>` : day.mode==='strength' ? day.exercises?.length||0 : day.mode==='cardio' ? day.cardio?.minutes||0 : '—'}</strong><span>${day.mode==='strength' ? active ? tr('เซตตามแผน','planned sets') : tr('ท่าในวันนี้','exercises today') : t('minutes')}</span></div><div><b data-workout-time>${active ? elapsed(active.startedAt) : '—'}</b><span>${t('duration')}</span></div></div>
+    ${active && day.mode==='strength' ? `<progress class="workout-progress" value="${progress.completed}" max="${progress.target||1}" aria-label="${tr('ความคืบหน้าการฝึก','Workout progress')}"></progress><p class="small">${progress.exercises}/${progress.exerciseTarget} ${tr('ท่าครบแล้ว','exercises complete')}${progress.additional ? ` · +${progress.additional} ${tr('เซตเพิ่มเติม','extra sets')}`:''}</p>`:''}
     ${day.mode !== "rest" ? `<button class="btn with-icon" style="width:100%;margin-top:14px;background:#fff;color:var(--accent-2)" data-action="${active ? "finish-session" : "start-session"}">${icon(active?"check":"play",18)}${active ? t("finish") : t("start")}</button>` : ""}
   </section>`;
+  if (day.mode === "strength") body += trainingControls(active);
   if (day.mode === "rest") body += `<section class="card empty section"><div class="empty-icon">${icon("rest",34)}</div><h2>${t("rest")}</h2><p>${lang()==="th"?"ฟื้นฟูร่างกาย แล้วกลับมาแข็งแรงกว่าเดิม":"Recover today and come back stronger."}</p><button class="btn ghost with-icon" data-action="edit-day">${icon("edit",18)}${t("changeMode")}</button></section>`;
   else if (day.mode === "cardio") body += renderCardio(day);
   else body += renderStrength(day, active);
@@ -137,19 +178,23 @@ function renderStrength(day, session) {
 }
 
 function strengthCard(item, index, session) {
-  const exercise = user().exercises.find(x=>x.id===item.exerciseId);
+  const exercise = exerciseById(item.exerciseId);
   const previous = previousWeekExercise(user(), item.exerciseId);
   const sets = (session?.sets || []).filter(s => s.exerciseId === item.exerciseId);
   const defaults = nextSetDefaults(session, item);
+  const entry = entryDefaults(exercise, defaults.weight);
+  const working = sets.filter(s => !s.warmup).length;
   const feedback = session?.feedback?.[item.exerciseId];
-  const complete = sets.filter(s=>!s.warmup).length >= item.sets;
-  return `<article class="card exercise">
-    <div class="exercise-main"><div class="exercise-title"><div class="exercise-index">${complete?icon("check",18):index+1}</div><div class="exercise-symbol">${categoryIcon(exercise?.category)}</div><div style="min-width:0;flex:1"><div class="row"><h3>${escapeHTML(exerciseName(item.exerciseId))}</h3>${complete?`<span class="badge good">${icon("check",14)}${t("done")}</span>`:""}</div><div class="muted small">${t("planned")}: ${item.sets} × ${item.repsBySet.join(" / ")} · ${fmt(item.weight,1)} ${t("kg")}</div></div></div>
-    <div class="previous">${t("previous")}: ${previous ? `<b>${fmt(previous.weight,1)} ${t("kg")}</b> · ${previous.reps} ${t("reps")}` : t("noData")}</div>
-    <form class="set-entry" data-form="set" data-exercise="${item.exerciseId}"><div class="field"><label>${t("weight")} (${t("kg")})</label><input name="weight" type="number" min="0" step="0.5" value="${defaults.weight}" ${session?"":"disabled"}></div><div class="field"><label>${t("set")} ${defaults.setNumber} · ${t("reps")}</label><input name="reps" type="number" min="1" step="1" value="${defaults.reps}" ${session?"":"disabled"}></div><button class="btn icon-only" aria-label="${t("record")}" ${session?"":"disabled"}>${icon("plus")}</button></form>
-    <label class="small muted" style="display:flex;align-items:center;gap:6px;margin-top:9px"><input name="warmup" form="" type="checkbox" data-warmup="${item.exerciseId}" style="width:18px;min-height:18px">${t("warmup")}</label></div>
-    ${sets.length ? `<div class="set-list">${sets.map((set,i)=>`<div class="set-row"><span class="set-number">${set.warmup?"W":i+1}</span><span><b>${fmt(set.weight,1)} ${t("kg")}</b> × ${set.reps}</span><button class="icon-btn" data-action="delete-set" data-set="${set.id}" aria-label="${t("delete")}">${icon("trash",17)}</button></div>`).join("")}</div>`:""}
-    ${session ? `<div class="performance">${[["reduce",t("reduce")],["maintain",t("maintain")],["increase",t("increase")]].map(([key,label])=>`<button data-action="feedback" data-exercise="${item.exerciseId}" data-value="${key}" class="${feedback===key?"active":""}">${label}</button>`).join("")}</div>`:""}
+  const complete = working >= item.sets;
+  const id = escapeHTML(item.exerciseId);
+  return `<article class="card exercise ${complete?'complete':''}">
+    <div class="exercise-main"><div class="exercise-title"><div class="exercise-index">${complete?icon('check',18):index+1}</div><div class="exercise-heading"><h3>${escapeHTML(exerciseName(item.exerciseId))}</h3><span class="muted small">${working}/${item.sets} ${t('set')} · ${tr('เป้า','Target')} ${item.repsBySet.join(' / ')} ${t('reps')}</span></div>${complete?`<span class="badge good">${t('done')}</span>`:''}</div>
+    <div class="previous">${t('previous')}: ${previous?`<b>${loadLabel(previous.weight)}</b> · ${previous.reps} ${t('reps')}`:t('noData')}</div>
+    <form class="set-entry" data-form="set" data-exercise="${id}"><div class="field"><label for="weight-${id}" data-weight-label>${t('weight')} · ${entry.bar===null?t('kg'):tr('กก./ข้าง','kg/side')}</label><input id="weight-${id}" name="weight" type="number" inputmode="decimal" min="0" max="1000" step="0.25" required value="${entry.input}" ${session?'':'disabled'}></div><div class="field"><label for="reps-${id}">${t('set')} ${defaults.setNumber} · ${t('reps')}</label><input id="reps-${id}" name="reps" type="number" inputmode="numeric" min="1" max="100" step="1" required value="${defaults.reps}" ${session?'':'disabled'}></div><button type="submit" class="btn icon-only" aria-label="${t('record')}" ${session?'':'disabled'}>${icon('plus')}</button>
+    <div class="load-caption" data-total-weight>${loadLabel(defaults.weight)}</div>
+    <details class="load-options"><summary>${tr('บาร์เบล / วอร์มอัป','Barbell / warm-up')}</summary><label class="check-label"><input type="checkbox" name="plates" ${entry.bar!==null?'checked':''} ${session?'':'disabled'}>${tr('ใส่แผ่นข้างเดียว','Enter plates per side')}</label><label class="bar-field">${tr('น้ำหนักบาร์ (กก.)','Bar weight (kg)')}<input name="bar" type="number" inputmode="decimal" min="0" max="50" step="0.25" required value="${barWeight(exercise)}" ${session?'':'disabled'}></label><label class="check-label"><input type="checkbox" name="warmup" ${session?'':'disabled'}>${t('warmup')}</label></details></form></div>
+    ${sets.length?`<div class="set-list">${sets.map((set,i)=>`<div class="set-row"><span class="set-number">${set.warmup?'W':sets.slice(0,i+1).filter(s=>!s.warmup).length}</span><span><b>${loadLabel(set.weight,set.barWeight??null)}</b> × ${set.reps}</span><button class="icon-btn" data-action="delete-set" data-set="${escapeHTML(set.id)}" aria-label="${t('delete')}">${icon('trash',17)}</button></div>`).join('')}</div>`:''}
+    ${session && working?`<div class="performance">${['reduce','maintain','increase'].map(key=>`<button data-action="feedback" data-exercise="${id}" data-value="${key}" class="${feedback===key?'active':''}">${t(key)}</button>`).join('')}</div>`:''}
   </article>`;
 }
 
@@ -180,7 +225,7 @@ function renderHistory() {
   const sessions = [...user().sessions].sort((a,b)=>new Date(b.startedAt)-new Date(a.startedAt));
   let body = pageHead(t("history"), t("sessions"));
   if (!sessions.length) body += `<section class="card empty"><div class="empty-icon">${icon("history",34)}</div><h2>${t("noData")}</h2><p>${t("emptyHistory")}</p></section>`;
-  else body += `<section class="card">${sessions.map(s=>{const d=new Date(s.startedAt), stats=sessionStats(s); return `<div class="session-row"><div class="date-box"><b>${d.getDate()}</b><span>${dateFmt(d,{month:"short"})}</span></div><div><h3 class="title-icon">${s.kind==="strength"?icon("strength",17):cardioIcon(s.activity)} ${s.kind==="strength"?(s.planName||t("strength")):(CARDIO[s.activity]?.[lang()==="th"?"th":"en"]||t("cardio"))}</h3><div class="muted small">${s.kind==="strength"?`${stats.sets} ${t("set")} · ${fmt(stats.volume)} ${t("kg")}`:`${fmt(stats.duration)} ${t("minutes")} · ${fmt(s.distance,1)} km`}</div></div><div style="text-align:right"><b>${fmt(stats.calories)}</b><div class="muted small">${t("kcal")}</div><button class="icon-btn danger-icon" data-action="delete-session" data-session="${s.id}" style="margin-top:6px" aria-label="${t("delete")}">${icon("trash",16)}</button></div></div>`}).join("")}</section>`;
+  else body += `<section class="card">${sessions.map(s=>{const d=new Date(s.startedAt), stats=sessionStats(s); return `<div class="session-row"><div class="date-box"><b>${d.getDate()}</b><span>${dateFmt(d,{month:"short"})}</span></div><div><h3 class="title-icon">${s.kind==="strength"?icon("strength",17):cardioIcon(s.activity)} ${s.kind==="strength"?escapeHTML(s.planName||t("strength")):(CARDIO[s.activity]?.[lang()==="th"?"th":"en"]||t("cardio"))}</h3><div class="muted small">${s.kind==="strength"?`${stats.sets} ${t("set")} · ${fmt(stats.volume)} ${t("kg")}`:`${fmt(stats.duration)} ${t("minutes")} · ${fmt(s.distance,1)} km`}</div></div><div style="text-align:right"><b>${fmt(stats.calories)}</b><div class="muted small">${t("kcal")}</div><button class="icon-btn danger-icon" data-action="delete-session" data-session="${s.id}" style="margin-top:6px" aria-label="${t("delete")}">${icon("trash",16)}</button></div></div>`}).join("")}</section>`;
   return shell(body);
 }
 
@@ -201,7 +246,7 @@ function renderProgress() {
   body+=`<section class="grid-2"><div class="metric"><b>${fmt(report.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(report.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div></section>
   <section class="card section"><div class="segmented">${[["weight",t("topWeight")],["oneRM",t("estimated1RM")],["volume",t("volume")],["calories",t("calories")]].map(([k,v])=>`<button data-action="metric" data-metric="${k}" class="${progressMetric===k?"active":""}">${v}</button>`).join("")}</div>
   ${["weight","oneRM"].includes(progressMetric)?`<div class="field" style="margin-top:14px"><label>${t("chooseExercise")}</label><select data-action="progress-exercise">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===progressExercise?"selected":""}>${escapeHTML(lang()==="th"?e.nameTh||e.name:e.name)}</option>`).join("")}</select></div>`:""}
-  <div style="margin-top:12px">${lineChart(points)}</div>${points.length?`<div class="row small muted"><span>${dateFmt(points[0].date,{day:"numeric",month:"short"})}</span><span>${dateFmt(points.at(-1).date,{day:"numeric",month:"short"})}</span></div>`:""}</section>`;
+  <p class="small muted">${tr("น้ำหนักรวมบาร์และแผ่นทั้งสองข้าง","Total weight includes the bar and plates on both sides")}</p><div style="margin-top:12px">${lineChart(points)}</div>${points.length?`<div class="row small muted"><span>${dateFmt(points[0].date,{day:"numeric",month:"short"})}</span><span>${dateFmt(points.at(-1).date,{day:"numeric",month:"short"})}</span></div>`:""}</section>`;
   return shell(body);
 }
 
@@ -212,10 +257,10 @@ function renderReport() {
   return shell(`${pageHead(t("report"),periodLabel(data),`<button class="btn small-btn no-print with-icon" data-action="print">${icon("report",17)}${t("printPDF")}</button>`)}
   <div class="segmented no-print" style="margin-bottom:12px"><button data-action="report-period" data-period="week" class="${reportPeriod==="week"?"active":""}">${t("weekly")}</button><button data-action="report-period" data-period="month" class="${reportPeriod==="month"?"active":""}">${t("monthly")}</button></div>
   <div class="row no-print" style="margin-bottom:14px"><button class="icon-btn" data-action="report-shift" data-shift="-1">${icon("back")}</button><b>${periodLabel(data)}</b><button class="icon-btn" data-action="report-shift" data-shift="1">${icon("chevron")}</button></div>
-  <article class="report-paper"><div class="row"><div><div class="eyebrow">LiftLog · ${t("report")}</div><h1>${escapeHTML(user().name)}</h1><p class="muted">${periodLabel(data)}</p></div><div class="mark">L</div></div><hr>
+  <article class="report-paper"><div class="row"><div><div class="eyebrow">LiftLog · ${t("report")}</div><h1>${escapeHTML(user().name)}</h1><p class="muted">${periodLabel(data)}</p></div><div class="mark">${icon("strength",24)}</div></div><hr>
   <div class="grid-2"><div class="metric"><b>${data.sessions.length}</b><span>${t("sessions")}</span></div><div class="metric"><b>${fmt(data.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div><div class="metric"><b>${fmt(data.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(data.totals.duration)}</b><span>${t("duration")} · ${t("minutes")}</span></div></div>
   <section class="section"><h2>${t("summary")}</h2><div class="stack" style="margin-top:12px"><div><div class="row small"><span>${t("strength")}</span><b>${data.totals.strength}</b></div><div class="report-bar"><i style="width:${data.sessions.length?data.totals.strength/data.sessions.length*100:0}%"></i></div></div><div><div class="row small"><span>${t("cardio")}</span><b>${data.totals.cardio}</b></div><div class="report-bar"><i style="width:${data.sessions.length?data.totals.cardio/data.sessions.length*100:0}%"></i></div></div></div></section>
-  <section class="section"><h2>${t("bestLifts")}</h2>${data.best.length?data.best.slice(0,6).map(x=>`<div class="row" style="padding:10px 0;border-bottom:1px solid #dfe8ea"><span>${escapeHTML(exerciseName(x.exerciseId))}</span><b>${fmt(x.weight,1)} ${t("kg")} × ${x.reps}</b></div>`).join(""):`<p class="muted">${t("noData")}</p>`}</section>
+  <section class="section"><h2>${t("bestLifts")}</h2>${data.best.length?data.best.slice(0,6).map(x=>`<div class="row" style="padding:10px 0;border-bottom:1px solid #dfe8ea"><span>${escapeHTML(exerciseName(x.exerciseId))}</span><b>${loadLabel(x.weight,x.barWeight??null)} × ${x.reps}</b></div>`).join(""):`<p class="muted">${t("noData")}</p>`}</section>
   <p class="small muted">${lang()==="th"?"สร้างจากข้อมูลที่บันทึกใน LiftLog บนอุปกรณ์นี้":"Generated from workout data stored in LiftLog on this device."}</p></article>`);
 }
 
@@ -229,12 +274,15 @@ function renderSettings() {
   <div style="padding-top:13px"><div class="muted small" style="margin-bottom:9px">${t("color")}</div><div class="grid-2">${Object.entries(colors).map(([k,c])=>`<button class="btn ${state.settings.theme===k?"":"secondary"}" data-setting="theme" data-value="${k}" style="display:flex;align-items:center;justify-content:center;gap:8px"><i class="color-dot" style="background:${c}"></i>${t(k)}</button>`).join("")}</div></div></section>
   <section class="card section"><h2 class="title-icon">${icon("shield")} ${t("backup")}</h2><p class="muted small">${t("privacy")}</p><div class="grid-2"><button class="btn secondary with-icon" data-action="export">${icon("download",18)}${t("export")}</button><button class="btn secondary with-icon" data-action="import">${icon("upload",18)}${t("import")}</button></div><button class="btn ghost with-icon" style="width:100%;margin-top:10px" data-action="persist-storage" ${persistence?"disabled":""}>${icon("shield",18)}${persistence?t("storageOn"):t("storageOff")}</button><input id="import-file" class="hidden" type="file" accept="application/json"></section>
   <section class="card section"><h2 class="title-icon">${icon("download")} ${t("install")}</h2><p>${t("installHelp")}</p><div class="notice">${lang()==="th"?"หลังติดตั้ง เปิดได้จากหน้าจอโฮมและใช้ได้แม้ไม่มีอินเทอร์เน็ต":"After installation, open it from the Home Screen and use it offline."}</div></section>`;
+  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.0 · 2026.10.04</span></section>`;
   return shell(body);
 }
 
 function draw() {
   const pages={today:renderToday,plans:renderPlans,history:renderHistory,progress:renderProgress,report:renderReport,settings:renderSettings};
+  captureEntries();
   root.innerHTML=(pages[route]||renderToday)();
+  restoreEntries(); tickRest();
 }
 
 function showModal(title, content) {
@@ -256,36 +304,45 @@ function dayEditorBody(day) {
 }
 
 function exerciseEditorRow(x,index) {
-  return `<div class="card" style="box-shadow:none;padding:12px" data-edit-exercise><div class="row"><div class="field" style="flex:1"><label>${t("chooseExercise")}</label><select name="exerciseId">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===x.exerciseId?"selected":""}>${escapeHTML(lang()==="th"?e.nameTh||e.name:e.name)}</option>`).join("")}</select></div><button type="button" class="icon-btn danger-icon" data-action="remove-editor-exercise" aria-label="${t("delete")}">${icon("trash",17)}</button></div><div class="grid-2"><div class="field"><label>${t("weight")} (${t("kg")})</label><input name="weight" type="number" min="0" step="0.5" value="${x.weight||0}"></div><div class="field"><label>${t("reps")} (${lang()==="th"?"คั่นด้วย /":"separate with /"})</label><input name="reps" value="${(x.repsBySet||[12,10,8]).join("/")}"></div></div></div>`;
+  const entry=entryDefaults(exerciseById(x.exerciseId),Number(x.weight)||0);
+  return `<div class="card" style="box-shadow:none;padding:12px" data-edit-exercise><div class="row"><div class="field" style="flex:1"><label>${t("chooseExercise")}</label><select name="exerciseId">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===x.exerciseId?"selected":""}>${escapeHTML(lang()==="th"?e.nameTh||e.name:e.name)}</option>`).join("")}</select></div><button type="button" class="icon-btn danger-icon" data-action="remove-editor-exercise" aria-label="${t("delete")}">${icon("trash",17)}</button></div><div class="grid-2"><div class="field"><label data-plan-weight-label>${t("weight")} (${entry.bar===null?t("kg"):tr("กก./ข้าง","kg/side")})</label><input name="weight" type="number" min="0" max="1000" step="0.25" required data-bar="${entry.bar??""}" value="${entry.input}"></div><div class="field"><label>${t("reps")} (${lang()==="th"?"คั่นด้วย /":"separate with /"})</label><input name="reps" value="${(x.repsBySet||[12,10,8]).join("/")}"></div></div></div>`;
 }
 
 function profilesModal() {
   showModal(t("profiles"),`<div class="stack">${state.users.map(u=>`<button class="btn ${u.id===state.activeUserId?"":"secondary"} with-icon" data-action="switch-user" data-user="${u.id}">${icon("user",18)}${escapeHTML(u.name)} ${u.id===state.activeUserId?icon("check",16):""}</button>`).join("")}<button class="btn ghost with-icon" data-action="new-user">${icon("plus",18)}${t("addUser")}</button></div>`);
 }
 
-function startSession() {
+async function startSession() {
+  if(user().activeSession)return;
   const {plan,day}=resolveDay(user());
   user().activeSession={id:uid("session"),kind:day.mode,startedAt:new Date().toISOString(),intensity:user().defaultIntensity||"moderate",bodyWeight:user().bodyWeight,planName:plan?.name||"",planned:structuredClone(day.exercises||[]),sets:[],feedback:{},...(day.cardio||{})};
-  persist(true); toast(t("sessionStarted"));
+  await persist(true); toast(t("sessionStarted"));
 }
 
-function finishSession() {
+async function finishSession() {
   const session=user().activeSession; if(!session)return;
   const cardioForm=document.querySelector('[data-form="cardio"]');
   if(session.kind==="cardio"&&cardioForm){const data=new FormData(cardioForm);Object.assign(session,{activity:data.get("activity"),minutes:Number(data.get("minutes")),distance:Number(data.get("distance")),treadmill:data.get("treadmill")==="on",speed:Number(data.get("speed")),incline:Number(data.get("incline")),note:data.get("note")});}
-  session.endedAt=new Date().toISOString(); user().sessions.push(session); user().activeSession=null;
-  persist(true); toast(t("sessionFinished"));
+  session.endedAt=new Date().toISOString(); user().sessions.push(session); user().activeSession=null; user().restTimer=null;
+  await persist(true); toast(t("sessionFinished"));
 }
 
-document.addEventListener("click",async event=>{
+on("click",async event=>{
   if(event.target.classList?.contains("modal-backdrop")){closeModal();return;}
   const routeButton=event.target.closest("[data-route]"); if(routeButton){route=routeButton.dataset.route; draw(); scrollTo(0,0); return;}
   const el=event.target.closest("[data-action],[data-setting]"); if(!el)return;
   const action=el.dataset.action;
+  if(action==='confirm-import'){if(!pendingImport)return;state=pendingImport;await persist();pendingImport=null;entryDrafts.clear();closeModal();draw();toast(t('imported'));return;}
+  if(action==='rest-extend'){extendRest(user());await persist();tickRest();return;}
+  if(action==='rest-skip'){user().restTimer=null;await persist(true);return;}
+  if(action==='apply-update'){
+    showModal(tr('อัปเดตแอป','Update app'),`<p>${tr('โปรไฟล์และเซตที่บันทึกไว้ยังอยู่ กรุณาบันทึกค่าที่กำลังกรอกก่อนอัปเดต','Saved profiles and sets will remain. Save any pending inputs before updating.')}</p><div class="grid-2"><button class="btn secondary" data-action="close-modal">${t('cancel')}</button><button class="btn" data-action="confirm-update">${tr('อัปเดตตอนนี้','Update now')}</button></div>`);return;
+  }
+  if(action==='confirm-update'){updateRegistration?.waiting?.postMessage({type:'SKIP_WAITING'});return;}
   if(action==="close-modal"){closeModal();return;}
   if(action==="profiles"){profilesModal();return;}
-  if(action==="start-session"){startSession();return;}
-  if(action==="finish-session"){finishSession();return;}
+  if(action==="start-session"){await startSession();return;}
+  if(action==="finish-session"){await finishSession();return;}
   if(action==="edit-day"){showModal(t("editDay"),`<div class="stack"><p class="muted">${lang()==="th"?"ต้องการให้การเปลี่ยนแปลงมีผลนานแค่ไหน?":"How long should this change apply?"}</p><button class="btn" data-action="edit-day-scope" data-scope="today">${t("todayOnly")}</button><button class="btn secondary" data-action="edit-day-scope" data-scope="permanent">${t("permanent")}</button></div>`);return;}
   if(action==="edit-day-scope"){planEditor(new Date().getDay(),el.dataset.scope==="today");return;}
   if(action==="edit-plan-day"){planEditor(Number(el.dataset.day),false);return;}
@@ -295,7 +352,7 @@ document.addEventListener("click",async event=>{
   }
   if(action==="add-editor-exercise"){el.previousElementSibling.insertAdjacentHTML("beforeend",exerciseEditorRow({exerciseId:user().exercises[0].id,weight:0,repsBySet:[12,10,8]},99));return;}
   if(action==="remove-editor-exercise"){el.closest("[data-edit-exercise]").remove();return;}
-  if(action==="delete-set") { user().activeSession.sets=user().activeSession.sets.filter(s=>s.id!==el.dataset.set); await persist(true); return; }
+  if(action==="delete-set") { const removed=user().activeSession.sets.find(s=>s.id===el.dataset.set); user().activeSession.sets=user().activeSession.sets.filter(s=>s.id!==el.dataset.set); if(removed && !user().activeSession.sets.some(s=>s.exerciseId===removed.exerciseId&&!s.warmup))delete user().activeSession.feedback[removed.exerciseId]; await persist(true); return; }
   if(action==="feedback") { user().activeSession.feedback[el.dataset.exercise]=el.dataset.value; await persist(true); return; }
   if(action==="new-plan") { showModal(t("newPlan"),`<form class="stack" data-form="new-plan"><div class="field"><label>${t("choosePreset")}</label><select name="preset"><option value="lean">${t("lean")}</option><option value="build">${t("build")}</option><option value="custom">${t("custom")}</option></select></div><div class="field"><label>${t("planName")}</label><input name="name" required placeholder="My Plan"></div><button class="btn">${t("save")}</button></form>`); return; }
   if(action==="select-plan") { selectedPlanId=el.dataset.plan; draw(); return; }
@@ -321,26 +378,48 @@ document.addEventListener("click",async event=>{
   }
 });
 
-document.addEventListener("change",async event=>{
+on("change",async event=>{
+  if(event.target.matches('[data-edit-exercise] select[name="exerciseId"]')){
+    const row=event.target.closest('[data-edit-exercise]'),input=row.querySelector('[name="weight"]');
+    const total=totalFor(Number(input.value),input.dataset.bar===''?null:Number(input.dataset.bar));
+    const entry=entryDefaults(exerciseById(event.target.value),total);input.value=entry.input;input.dataset.bar=entry.bar??'';
+    row.querySelector('[data-plan-weight-label]').textContent=`${t('weight')} (${entry.bar===null?t('kg'):tr('กก./ข้าง','kg/side')})`;return;
+  }
+  if(event.target.dataset.training){
+    if(event.target.dataset.training==='intensity'){user().defaultIntensity=event.target.value;if(user().activeSession?.kind==='strength')user().activeSession.intensity=event.target.value;}
+    else {user().restAutomatic=event.target.value!=='off';user().restDuration=Number(event.target.value)||0;if(!user().restAutomatic)user().restTimer=null;}
+    await persist(true);return;
+  }
   if(event.target.matches('[data-action="progress-exercise"]')){progressExercise=event.target.value;draw();return;}
   if(event.target.matches('[data-setting="bodyWeight"]')){user().bodyWeight=Number(event.target.value)||70;await persist();return;}
   if(event.target.id==="import-file"&&event.target.files[0]){
-    try{state=normalizeState(JSON.parse(await event.target.files[0].text()));await persist(true);toast(t("imported"));}catch{toast(lang()==="th"?"ไฟล์สำรองไม่ถูกต้อง":"Invalid backup file");}
+    try{
+      pendingImport=normalizeState(JSON.parse(await event.target.files[0].text()));
+      showModal(t('import'),`<p>${tr('ไฟล์นี้มี','This backup contains')} <b>${pendingImport.users.length}</b> ${t('profiles')} · <b>${pendingImport.users.reduce((n,u)=>n+u.sessions.length,0)}</b> ${t('sessions')}</p><p>${tr('การกู้คืนจะแทนที่ข้อมูลทั้งหมดในแอปนี้ ควรดาวน์โหลดสำรองปัจจุบันก่อน','Restoring replaces all data in this app. Download your current backup first.')}</p><div class="stack"><button class="btn secondary" data-action="export">${t('export')}</button><button class="btn" data-action="confirm-import">${t('import')}</button><button class="btn ghost" data-action="close-modal">${t('cancel')}</button></div>`);
+    }catch{pendingImport=null;toast(tr('ไฟล์สำรองไม่ถูกต้อง','Invalid backup file'));}
+
   }
 });
 
-document.addEventListener("submit",async event=>{
+on("submit",async event=>{
   event.preventDefault(); const form=event.target; const data=new FormData(form); const kind=form.dataset.form;
   if(kind==="set"){
-    if(!user().activeSession)return; const warm=document.querySelector(`[data-warmup="${form.dataset.exercise}"]`);
-    user().activeSession.sets.push({id:uid("set"),exerciseId:form.dataset.exercise,weight:Number(data.get("weight")),reps:Number(data.get("reps")),warmup:Boolean(warm?.checked),createdAt:new Date().toISOString()}); if(warm)warm.checked=false; await persist(true); return;
+    if(!user().activeSession || !form.reportValidity())return;
+    const bar=data.get('plates')==='on'?Number(data.get('bar')):null;
+    const set={id:uid('set'),exerciseId:form.dataset.exercise,weight:totalFor(Number(data.get('weight')),bar),barWeight:bar,reps:Number(data.get('reps')),warmup:data.get('warmup')==='on',createdAt:new Date().toISOString()};
+    if(!Number.isInteger(set.reps)||set.reps<1||set.reps>100)throw new Error('invalid-reps');
+    user().activeSession.sets.push(set);
+    const exercise=exerciseById(set.exerciseId);exercise.weightEntry=bar===null?'total':'plates';if(bar!==null)exercise.barWeight=bar;
+    startRest(user(),set);
+    await persist();entryDrafts.delete(draftKey(form));form.dataset.saved='true';draw();toast(t('copied'));return;
   }
   if(kind==="cardio") { if(!user().activeSession)return; Object.assign(user().activeSession,{activity:data.get("activity"),minutes:Number(data.get("minutes")),distance:Number(data.get("distance")),treadmill:data.get("treadmill")==="on",speed:Number(data.get("speed")),incline:Number(data.get("incline")),note:data.get("note")});await persist(true);toast(t("copied"));return; }
   if(kind==="day-editor") {
     const mode=data.get("mode"); let day;
     if(mode==="rest")day=restDay(); else if(mode==="cardio")day={mode,cardio:{activity:data.get("activity"),minutes:Number(data.get("minutes"))||30,distance:0,treadmill:data.get("treadmill")==="on",speed:Number(data.get("speed"))||5,incline:Number(data.get("incline"))||0}};
-    else day={mode,exercises:[...form.querySelectorAll("[data-edit-exercise]")].map(row=>{const reps=row.querySelector('[name="reps"]').value.split(/[\/,\s]+/).map(Number).filter(n=>n>0);return{exerciseId:row.querySelector('[name="exerciseId"]').value,weight:Number(row.querySelector('[name="weight"]').value)||0,sets:reps.length,repsBySet:reps.length?reps:[12,10,8]};})};
+    else day={mode,exercises:[...form.querySelectorAll("[data-edit-exercise]")].map(row=>{const reps=row.querySelector('[name="reps"]').value.split(/[\/,\s]+/).filter(Boolean).map(Number);if(!reps.length||reps.some(n=>!Number.isInteger(n)||n<1||n>100))throw new Error("invalid-reps");return{exerciseId:row.querySelector('[name="exerciseId"]').value,weight:totalFor(Number(row.querySelector('[name="weight"]').value),row.querySelector('[name="weight"]').dataset.bar===""?null:Number(row.querySelector('[name="weight"]').dataset.bar)),sets:reps.length,repsBySet:reps.length?reps:[12,10,8]};})};
     if(form.dataset.today==="true") user().overrides[localDateKey()]={sourceProgramId:activePlan(user()).id,sourceProgramName:activePlan(user()).name,dayPlan:day}; else (user().programs.find(p=>p.id===form.dataset.plan)||activePlan(user())).days[Number(form.dataset.day)]=day;
+    if(user().activeSession?.kind==='strength' && day.mode==='strength' && Number(form.dataset.day)===new Date().getDay() && (form.dataset.today==='true' || form.dataset.plan===activePlan(user()).id))user().activeSession.planned=structuredClone(day.exercises);
     closeModal();await persist(true);return;
   }
   if(kind==="new-plan") { const key=data.get("preset"); const plan=key==="custom"?{...presetPlan("lean",data.get("name")),presetKey:"custom",days:{0:restDay(),1:restDay(),2:restDay(),3:restDay(),4:restDay(),5:restDay(),6:restDay()}}:presetPlan(key,data.get("name")||undefined);user().programs.push(plan);user().activeProgramId=plan.id;closeModal();await persist(true);return; }
@@ -348,11 +427,75 @@ document.addEventListener("submit",async event=>{
   if(kind==="new-user") { const lean=presetPlan("lean");const u={id:uid("user"),name:data.get("name"),bodyWeight:Number(data.get("bodyWeight"))||70,defaultIntensity:"moderate",exercises:structuredClone(state.users[0].exercises),programs:[lean,presetPlan("build")],activeProgramId:lean.id,overrides:{},sessions:[],activeSession:null};state.users.push(u);state.activeUserId=u.id;closeModal();await persist(true);return; }
 });
 
+// Serialize user actions so repeated taps cannot race an IndexedDB transaction.
+function on(type,handler){
+  document.addEventListener(type,async event=>{
+    if(type==='click'&&!event.target.closest('[data-action],[data-route],[data-setting][data-value]')&&!event.target.classList?.contains('modal-backdrop'))return;
+    if(type==='submit')event.preventDefault();
+    if(busy)return;
+    busy=true;
+    try{await handler(event);}catch(error){
+      if(savedState)state=structuredClone(savedState);
+      toast(error.message?.startsWith('invalid-') ? tr('ตรวจน้ำหนักและจำนวนครั้งอีกครั้ง','Check the weight and reps') : tr('บันทึกไม่สำเร็จ ข้อมูลที่บันทึกก่อนหน้ายังอยู่ กรุณาลองอีกครั้ง','Save failed. Previously saved data remains. Please retry.'));
+    }finally{busy=false;}
+  });
+}
+function draftKey(form){return `${form.dataset.owner||state.activeUserId}:${form.dataset.session||user().activeSession?.id||'preview'}:${form.dataset.exercise}`;}
+function captureEntries(){
+  for(const form of document.querySelectorAll('[data-form="set"]')){
+    if(form.dataset.saved==='true'||form.dataset.dirty!=='true')continue;
+    entryDrafts.set(draftKey(form),Object.fromEntries([...form.elements].filter(e=>e.name).map(e=>[e.name,e.type==='checkbox'?e.checked:e.value])));
+  }
+}
+function restoreEntries(){
+  for(const form of document.querySelectorAll('[data-form="set"]')){
+    form.dataset.owner=state.activeUserId;form.dataset.session=user().activeSession?.id||'preview';
+    const draft=entryDrafts.get(draftKey(form));
+    if(draft){for(const [key,v] of Object.entries(draft)){const el=form.elements.namedItem(key);if(el){if(el.type==='checkbox')el.checked=v;else el.value=v;}}form.dataset.dirty='true';}
+    updateLoad(form);
+  }
+}
+function updateLoad(form){
+  const bar=form.elements.plates.checked?Number(form.elements.bar.value):null;
+  let total;try{total=totalFor(Number(form.elements.weight.value),bar);}catch{total=NaN;}
+  form.querySelector('[data-weight-label]').textContent=`${t('weight')} · ${bar===null?t('kg'):tr('กก./ข้าง','kg/side')}`;
+  form.querySelector('[data-total-weight]').textContent=Number.isFinite(total)?loadLabel(total)+(bar!==null?` · ${tr('บาร์','bar')} ${fmt(bar,2)} ${t('kg')}`:''):tr('ตรวจน้ำหนักอีกครั้ง','Check the weight');
+  form.elements.bar.disabled=bar===null||!user().activeSession;
+}
+document.addEventListener('input',event=>{
+  const form=event.target.closest('[data-form="set"]');if(!form)return;
+  if(event.target.name==='plates'){
+    const bar=Number(form.elements.bar.value),weight=Number(form.elements.weight.value);
+    if(event.target.checked){const plates=platesFor(weight,bar);if(plates===null){event.target.checked=false;toast(tr('น้ำหนักรวมต้องไม่น้อยกว่าบาร์','Total must be at least the bar weight'));}else form.elements.weight.value=plates;}
+    else form.elements.weight.value=totalFor(weight,bar);
+  }
+  form.dataset.dirty='true';updateLoad(form);captureEntries();
+});
+setInterval(()=>{if(!state)return;tickRest();const el=document.querySelector('[data-workout-time]');if(el&&user().activeSession)el.textContent=elapsed(user().activeSession.startedAt);},1000);
+document.addEventListener('visibilitychange',()=>{if(state)tickRest();});
 async function boot() {
-  try { state=normalizeState(await loadState() || createInitialState()); }
-  catch { state=createInitialState(); }
-  persistence=await isStoragePersistent(); applyTheme(); draw(); await saveState(state);
-  if("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{});
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(state.settings.appearance==="system"){applyTheme();draw();}});
+  try {
+    const stored=await loadState();
+    state=normalizeState(stored===null?createInitialState():stored);
+    // Render first. A malformed existing record must never trigger an empty reset.
+    applyTheme();draw();
+    await saveState(state);savedState=structuredClone(state);
+  } catch {
+    state=null;
+    root.innerHTML='<main class="boot"><h1>LiftLog</h1><p>เปิดข้อมูลไม่สำเร็จ / Could not open saved data</p><p>ข้อมูลเดิมยังไม่ถูกแทนที่ด้วยข้อมูลใหม่ / Your data has not been reset.</p><button class="btn" onclick="location.reload()">ลองอีกครั้ง / Retry</button></main>';return;
+  }
+  persistence=await isStoragePersistent().catch(()=>false);
+  if('serviceWorker' in navigator){
+    let hadController=Boolean(navigator.serviceWorker.controller),reloading=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloading){reloading=true;location.reload();}hadController=true;});
+    navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(reg=>{
+      updateRegistration=reg;
+      const offer=()=>{
+        if(reg.waiting&&!document.querySelector('.update-notice'))document.querySelector('.topbar')?.insertAdjacentHTML('afterend',`<div class="update-notice"><span>${tr('มีเวอร์ชันใหม่พร้อมใช้','An update is ready')}</span><button class="btn small-btn" data-action="apply-update">${tr('อัปเดต','Update')}</button></div>`);
+      };
+      offer();reg.addEventListener('updatefound',()=>{const worker=reg.installing;worker?.addEventListener('statechange',()=>{if(worker.state==='installed')offer();});});
+    }).catch(()=>{});
+  }
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(state.settings.appearance==='system')applyTheme();});
 }
 boot();

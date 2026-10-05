@@ -1,4 +1,4 @@
-export const APP_VERSION = 1;
+export const APP_VERSION = 2;
 
 export const EXERCISES = [
   ["bench-press", "Bench Press", "เบนช์เพรส", "chest"],
@@ -160,16 +160,40 @@ export function createInitialState() {
   };
 }
 
-export function normalizeState(value) {
-  if (!value || typeof value !== "object" || !Array.isArray(value.users)) throw new Error("invalid-backup");
+export function normalizeState(input) {
+  if (!input || typeof input !== "object" || !Array.isArray(input.users) || !input.users.length || (input.version ?? 1) > APP_VERSION) throw new Error("invalid-backup");
+  const value = structuredClone(input);
+  const ids = new Set();
+  const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id);
+  const validNumber = n => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+  const checkDay = day => {
+    if (!day || !['strength','cardio','rest'].includes(day.mode)) throw new Error('invalid-backup');
+    if (day.mode === 'strength' && (!Array.isArray(day.exercises) || day.exercises.some(x => !x || !validId(x.exerciseId) || !validNumber(x.weight) || !Number.isInteger(x.sets) || x.sets < 0 || !Array.isArray(x.repsBySet) || !x.repsBySet.length || x.repsBySet.some(n => !Number.isInteger(n) || n < 1)))) throw new Error('invalid-backup');
+    if (day.mode === 'cardio' && (!day.cardio || !CARDIO[day.cardio.activity] || !validNumber(day.cardio.minutes))) throw new Error('invalid-backup');
+  };
   value.version = APP_VERSION;
-  value.settings ||= { language: "th", appearance: "system", theme: "cool" };
+  value.settings = { language: "th", appearance: "system", theme: "cool", ...value.settings };
+  if (!['th', 'en'].includes(value.settings.language)) value.settings.language = 'th';
   for (const user of value.users) {
+    if (!user || !validId(user.id) || ids.has(user.id) || typeof user.name !== 'string' || !Array.isArray(user.programs) || !user.programs.length || !Array.isArray(user.sessions)) throw new Error('invalid-backup');
+    ids.add(user.id);
+    for (const p of user.programs) {
+      if (!p || !validId(p.id) || typeof p.name !== 'string' || !p.days || typeof p.days !== 'object') throw new Error('invalid-backup');
+      Object.values(p.days).forEach(checkDay);
+    }
+    for (const session of [...user.sessions, ...(user.activeSession ? [user.activeSession] : [])]) {
+      if (!session || !validId(session.id) || !['strength', 'cardio'].includes(session.kind) || !Number.isFinite(Date.parse(session.startedAt)) || (session.kind === 'strength' && !Array.isArray(session.sets))) throw new Error('invalid-backup');
+      if (session.sets?.some(x => !x || !validId(x.exerciseId) || (x.id !== undefined && !validId(x.id)) || !validNumber(x.weight) || !Number.isInteger(x.reps) || x.reps < 1 || (x.barWeight != null && !validNumber(x.barWeight)))) throw new Error('invalid-backup');
+      if (session.planned) checkDay({mode:'strength',exercises:session.planned});
+    }
     user.exercises ||= structuredClone(EXERCISES);
-    user.programs ||= [];
-    user.sessions ||= [];
+    if (!Array.isArray(user.exercises) || user.exercises.some(e => !e || !validId(e.id) || typeof e.name !== 'string')) throw new Error('invalid-backup');
     user.overrides ||= {};
+    for (const override of Object.values(user.overrides)) checkDay(override?.dayPlan);
     user.bodyWeight ||= 70;
+    user.restAutomatic ??= true;
+    user.restDuration = [0, 60, 90].includes(user.restDuration) ? user.restDuration : 0;
+    if (user.restTimer && (!Number.isFinite(user.restTimer.deadline) || user.restTimer.sessionId !== user.activeSession?.id)) user.restTimer = null;
   }
   if (!value.users.some(u => u.id === value.activeUserId)) value.activeUserId = value.users[0]?.id;
   return value;

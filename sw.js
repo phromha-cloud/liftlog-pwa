@@ -1,17 +1,24 @@
-const CACHE = "liftlog-v4";
+const CACHE = 'liftlog-v5-20261004';
 const ASSETS = [
-  "./", "./index.html", "./styles.css", "./manifest.webmanifest",
-  "./app.js", "./core.js", "./db.js", "./icons.js",
-  "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"
+  './', './index.html', './styles.css', './manifest.webmanifest',
+  './app.js', './core.js', './db.js', './icons.js', './training.js',
+  './icon-192.png', './icon-512.png', './apple-touch-icon.png'
 ];
-
-self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
-self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
-self.addEventListener("fetch", event => {
-  if (event.request.method !== "GET") return;
-  event.respondWith(fetch(event.request).then(response => {
-    const copy = response.clone();
-    caches.open(CACHE).then(cache => cache.put(event.request, copy));
-    return response;
-  }).catch(() => caches.match(event.request).then(cached => cached || caches.match("./index.html"))));
+self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
+self.addEventListener('message', event => { if (event.data?.type === 'SKIP_WAITING') self.skipWaiting(); });
+self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('liftlog-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
+self.addEventListener('fetch', event => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || !url.href.startsWith(self.registration.scope)) return;
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    // Serve a complete version until the next update is ready and accepted.
+    const cached = await cache.match(event.request, { ignoreSearch: true });
+    if (cached) return cached;
+    try { return await fetch(event.request); }
+    catch {
+      if (event.request.mode === 'navigate') return await cache.match('./index.html');
+      return Response.error();
+    }
+  })());
 });

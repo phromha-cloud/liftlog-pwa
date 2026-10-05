@@ -138,3 +138,54 @@ hr { border:0; border-top:1px solid var(--line); margin:16px 0; }
   .shell { max-width:none; padding:0; }
   .report-paper { box-shadow:none; border-radius:0; padding:12mm; }
 }
+
+/* Native-inspired training hierarchy */
+.hero { background:var(--surface); color:var(--text); border:1px solid var(--line); }
+.hero .muted { color:var(--muted); }
+.hero-row h2 { font-size:1.4rem; overflow-wrap:anywhere; }
+.hero-summary { display:flex; align-items:end; justify-content:space-between; margin:20px 0 14px; gap:12px; }
+.hero-summary>div { display:grid; gap:5px; }
+.hero-summary>div:last-child { text-align:right; }
+.hero-summary strong { font-size:2.8rem; line-height:1; letter-spacing:-.055em; color:var(--accent); font-variant-numeric:tabular-nums; }
+.hero-summary strong span { font-size:1.4rem; color:var(--muted); font-weight:500; }
+.hero-summary>div>span { font-size:.8rem; color:var(--muted); }
+.hero button.btn { background:var(--accent)!important; color:var(--bg)!important; }
+.workout-progress { appearance:none; width:100%; height:7px; border:0; border-radius:20px; overflow:hidden; }
+.workout-progress::-webkit-progress-bar { background:var(--surface-2); }
+.workout-progress::-webkit-progress-value { background:var(--accent); border-radius:20px; }
+.workout-progress::-moz-progress-bar { background:var(--accent); }
+.training-controls { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:14px 0; }
+.training-controls label { display:grid; gap:6px; color:var(--muted); font-size:.8rem; }
+.training-controls select { color:var(--text); font-size:.9rem; min-width:0; }
+.rest-banner { position:sticky; top:env(safe-area-inset-top,0px); z-index:25; display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid var(--line); background:var(--surface); padding:12px; margin:0 0 16px; border-radius:18px; box-shadow:var(--shadow); }
+.rest-banner .eyebrow { font-size:.7rem; letter-spacing:0; }
+.rest-time { display:flex; align-items:baseline; gap:8px; }
+.rest-time strong { font-size:1.8rem; font-variant-numeric:tabular-nums; letter-spacing:-.04em; }
+.rest-time span { font-size:.75rem; color:var(--muted); max-width:130px; overflow-wrap:anywhere; }
+.rest-actions { display:flex; gap:6px; }
+.rest-actions .btn { padding:8px 10px; }
+.exercise-heading { flex:1; min-width:0; }
+.exercise-heading h3 { font-size:1.12rem; line-height:1.35; }
+.exercise-title { gap:10px; align-items:center; }
+.exercise.complete { border-color:color-mix(in srgb,var(--good) 45%,var(--line)); }
+.set-entry { grid-template-columns:minmax(0,1fr) minmax(0,.85fr) 48px; }
+.set-entry input[name="weight"],.set-entry input[name="reps"] { font-size:1.7rem; font-weight:750; height:62px; padding:8px 10px; letter-spacing:-.035em; }
+.set-entry input[name="weight"] { color:var(--accent); }
+.set-entry .icon-only { width:48px; height:62px; }
+.load-caption,.load-options { grid-column:1/-1; }
+.load-caption { font-size:.78rem; color:var(--muted); }
+.load-options { margin-top:4px; font-size:.8rem; }
+.load-options summary { min-height:32px; padding:7px 0; color:var(--muted); cursor:pointer; }
+.check-label { display:flex; align-items:center; gap:9px; min-height:44px; }
+.check-label input { width:20px; min-height:20px; accent-color:var(--accent); }
+.bar-field { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+.bar-field input { width:110px; }
+.profile-chip { display:flex; align-items:center; gap:7px; min-height:44px; }
+.profile-chip span { overflow:hidden; text-overflow:ellipsis; }
+.update-notice { display:flex; gap:10px; align-items:center; justify-content:space-between; padding:10px 12px; border-radius:13px; background:var(--accent-soft); font-size:.85rem; margin-bottom:14px; }
+.performance button { font-size:.76rem; }
+.settings-row { flex-wrap:wrap; }
+.segmented { overflow-x:auto; }
+button:focus-visible,summary:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+@media(max-width:370px){.rest-banner{flex-wrap:wrap}.rest-actions{margin-left:auto}.exercise-main{padding:12px}.hero{padding:16px}.performance{padding:10px}.shell{padding-left:12px;padding-right:12px}}
+@media print {.rest-banner,.update-notice{display:none!important}}

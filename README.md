@@ -1,5 +1,13 @@
 # LiftLog PWA
 
+## PWA 2.1 · 5 October 2026
+
+- Create custom exercises in the day/plan editor or Settings → My exercises.
+- Choose Dumbbell (kg per dumbbell), Barbell (plates per side + editable bar weight), or Other / bodyweight.
+- Exercises belong to the current profile, can be reused in its plans, and are included in backups.
+- Existing history is unchanged. Custom dumbbell volume uses recorded weight × reps without automatically doubling it.
+- Open the existing app online and accept Update. Settings shows 2.1 · 2026.10.05.
+
 LiftLog เวอร์ชันเว็บแอปสำหรับติดตั้งบน iPhone ผ่าน Safari ใช้งานเวท คาร์ดิโอ แผนฝึก กราฟ และรายงานได้โดยไม่ต้องต่ออายุใบรับรองแอปทุก 7 วัน
 
 ## คุณสมบัติ

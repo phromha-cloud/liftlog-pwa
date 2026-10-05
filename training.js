@@ -2,7 +2,9 @@ import { localDateKey } from './core.js';
 
 // Storage and charts always use total kilograms, including both sides and the bar.
 export function isBarbell(exercise) {
+  if (exercise?.equipment === 'dumbbell' || exercise?.equipment === 'other') return false;
   if (exercise?.weightEntry === 'total') return false;
+  if (exercise?.equipment === 'barbell') return true;
   if (exercise?.weightEntry === 'plates') return true;
   const name = (exercise?.name || '').trim().toLowerCase();
   return /barbell|บาร์เบล/.test(name) || ['bench press', 'incline bench press', 'decline bench press', 'deadlift', 'back squat', 'front squat', 'romanian deadlift', 'overhead press'].includes(name);

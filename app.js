@@ -1,6 +1,6 @@
 import { barWeight, platesFor, totalFor, entryDefaults, workoutProgress, startRest, remainingRest, extendRest } from "./training.js";
 import {
-  createInitialState, normalizeState, activeUser, activePlan, resolveDay, deletePlan,
+  createInitialState, normalizeState, addCustomExercise, EXERCISES, activeUser, activePlan, resolveDay, deletePlan,
   nextSetDefaults, previousWeekExercise, localDateKey, dateFromKey, uid, presetPlan,
   CARDIO, sessionStats, chartSeries, reportData, calculateOneRM, escapeHTML, restDay,
 } from "./core.js";
@@ -95,7 +95,11 @@ async function persist(render = false) {
 }
 const tr = (th, en) => lang() === 'th' ? th : en;
 const exerciseById = id => user().exercises.find(e => e.id === id);
-function loadLabel(total, bar = null) {
+const equipmentLabel = e => e?.equipment === 'dumbbell' ? 'Dumbbell' : e?.equipment === 'barbell' ? 'Barbell' : e?.equipment === 'other' ? tr('อื่น ๆ','Other') : '';
+const weightUnit = (e, bar = null) => bar !== null ? tr('กก./ข้าง','kg/side') : e?.equipment === 'dumbbell' ? tr('กก./ลูก','kg/dumbbell') : t('kg');
+const exerciseOptionName = e => `${lang()==='th'?e.nameTh||e.name:e.name}${e.equipment?` · ${equipmentLabel(e)}`:''}`;
+function loadLabel(total, bar = null, unit = null) {
+  if(unit === 'per-hand') return `${fmt(total,2)} ${tr('กก./ลูก','kg/dumbbell')}`;
   const side = bar === null ? null : platesFor(Number(total), bar);
   return side === null ? `${fmt(total, 2)} ${t('kg')} ${tr('รวม', 'total')}` : `${fmt(side, 2)} ${tr('กก./ข้าง', 'kg/side')}`;
 }
@@ -189,11 +193,11 @@ function strengthCard(item, index, session) {
   const id = escapeHTML(item.exerciseId);
   return `<article class="card exercise ${complete?'complete':''}">
     <div class="exercise-main"><div class="exercise-title"><div class="exercise-index">${complete?icon('check',18):index+1}</div><div class="exercise-heading"><h3>${escapeHTML(exerciseName(item.exerciseId))}</h3><span class="muted small">${working}/${item.sets} ${t('set')} · ${tr('เป้า','Target')} ${item.repsBySet.join(' / ')} ${t('reps')}</span></div>${complete?`<span class="badge good">${t('done')}</span>`:''}</div>
-    <div class="previous">${t('previous')}: ${previous?`<b>${loadLabel(previous.weight)}</b> · ${previous.reps} ${t('reps')}`:t('noData')}</div>
-    <form class="set-entry" data-form="set" data-exercise="${id}"><div class="field"><label for="weight-${id}" data-weight-label>${t('weight')} · ${entry.bar===null?t('kg'):tr('กก./ข้าง','kg/side')}</label><input id="weight-${id}" name="weight" type="number" inputmode="decimal" min="0" max="1000" step="0.25" required value="${entry.input}" ${session?'':'disabled'}></div><div class="field"><label for="reps-${id}">${t('set')} ${defaults.setNumber} · ${t('reps')}</label><input id="reps-${id}" name="reps" type="number" inputmode="numeric" min="1" max="100" step="1" required value="${defaults.reps}" ${session?'':'disabled'}></div><button type="submit" class="btn icon-only" aria-label="${t('record')}" ${session?'':'disabled'}>${icon('plus')}</button>
+    <div class="previous">${t('previous')}: ${previous?`<b>${loadLabel(previous.weight,previous.barWeight??null,previous.weightUnit)}</b> · ${previous.reps} ${t('reps')}`:t('noData')}</div>
+    <form class="set-entry" data-form="set" data-exercise="${id}"><div class="field"><label for="weight-${id}" data-weight-label>${t('weight')} · ${weightUnit(exercise,entry.bar)}</label><input id="weight-${id}" name="weight" type="number" inputmode="decimal" min="0" max="1000" step="0.25" required value="${entry.input}" ${session?'':'disabled'}></div><div class="field"><label for="reps-${id}">${t('set')} ${defaults.setNumber} · ${t('reps')}</label><input id="reps-${id}" name="reps" type="number" inputmode="numeric" min="1" max="100" step="1" required value="${defaults.reps}" ${session?'':'disabled'}></div><button type="submit" class="btn icon-only" aria-label="${t('record')}" ${session?'':'disabled'}>${icon('plus')}</button>
     <div class="load-caption" data-total-weight>${loadLabel(defaults.weight)}</div>
-    <details class="load-options"><summary>${tr('บาร์เบล / วอร์มอัป','Barbell / warm-up')}</summary><label class="check-label"><input type="checkbox" name="plates" ${entry.bar!==null?'checked':''} ${session?'':'disabled'}>${tr('ใส่แผ่นข้างเดียว','Enter plates per side')}</label><label class="bar-field">${tr('น้ำหนักบาร์ (กก.)','Bar weight (kg)')}<input name="bar" type="number" inputmode="decimal" min="0" max="50" step="0.25" required value="${barWeight(exercise)}" ${session?'':'disabled'}></label><label class="check-label"><input type="checkbox" name="warmup" ${session?'':'disabled'}>${t('warmup')}</label></details></form></div>
-    ${sets.length?`<div class="set-list">${sets.map((set,i)=>`<div class="set-row"><span class="set-number">${set.warmup?'W':sets.slice(0,i+1).filter(s=>!s.warmup).length}</span><span><b>${loadLabel(set.weight,set.barWeight??null)}</b> × ${set.reps}</span><button class="icon-btn" data-action="delete-set" data-set="${escapeHTML(set.id)}" aria-label="${t('delete')}">${icon('trash',17)}</button></div>`).join('')}</div>`:''}
+    <details class="load-options"><summary>${exercise?.equipment==='dumbbell'?tr('วอร์มอัป','Warm-up'):tr('บาร์เบล / วอร์มอัป','Barbell / warm-up')}</summary><div ${exercise?.equipment==='dumbbell'||exercise?.equipment==='other'?'hidden':''}><label class="check-label"><input type="checkbox" name="plates" ${entry.bar!==null?'checked':''} ${session?'':'disabled'}>${tr('ใส่แผ่นข้างเดียว','Enter plates per side')}</label><label class="bar-field">${tr('น้ำหนักบาร์ (กก.)','Bar weight (kg)')}<input name="bar" type="number" inputmode="decimal" min="0" max="50" step="0.25" required value="${barWeight(exercise)}" ${session?'':'disabled'}></label></div><label class="check-label"><input type="checkbox" name="warmup" ${session?'':'disabled'}>${t('warmup')}</label></details></form></div>
+    ${sets.length?`<div class="set-list">${sets.map((set,i)=>`<div class="set-row"><span class="set-number">${set.warmup?'W':sets.slice(0,i+1).filter(s=>!s.warmup).length}</span><span><b>${loadLabel(set.weight,set.barWeight??null,set.weightUnit)}</b> × ${set.reps}</span><button class="icon-btn" data-action="delete-set" data-set="${escapeHTML(set.id)}" aria-label="${t('delete')}">${icon('trash',17)}</button></div>`).join('')}</div>`:''}
     ${session && working?`<div class="performance">${['reduce','maintain','increase'].map(key=>`<button data-action="feedback" data-exercise="${id}" data-value="${key}" class="${feedback===key?'active':''}">${t(key)}</button>`).join('')}</div>`:''}
   </article>`;
 }
@@ -245,8 +249,8 @@ function renderProgress() {
   let body=pageHead(t("progress"),lang()==="th"?"กราฟเส้น":"Line charts",`<button class="btn small-btn with-icon" data-action="report">${icon("report",17)}${t("report")}</button>`);
   body+=`<section class="grid-2"><div class="metric"><b>${fmt(report.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(report.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div></section>
   <section class="card section"><div class="segmented">${[["weight",t("topWeight")],["oneRM",t("estimated1RM")],["volume",t("volume")],["calories",t("calories")]].map(([k,v])=>`<button data-action="metric" data-metric="${k}" class="${progressMetric===k?"active":""}">${v}</button>`).join("")}</div>
-  ${["weight","oneRM"].includes(progressMetric)?`<div class="field" style="margin-top:14px"><label>${t("chooseExercise")}</label><select data-action="progress-exercise">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===progressExercise?"selected":""}>${escapeHTML(lang()==="th"?e.nameTh||e.name:e.name)}</option>`).join("")}</select></div>`:""}
-  <p class="small muted">${tr("น้ำหนักรวมบาร์และแผ่นทั้งสองข้าง","Total weight includes the bar and plates on both sides")}</p><div style="margin-top:12px">${lineChart(points)}</div>${points.length?`<div class="row small muted"><span>${dateFmt(points[0].date,{day:"numeric",month:"short"})}</span><span>${dateFmt(points.at(-1).date,{day:"numeric",month:"short"})}</span></div>`:""}</section>`;
+  ${["weight","oneRM"].includes(progressMetric)?`<div class="field" style="margin-top:14px"><label>${t("chooseExercise")}</label><select data-action="progress-exercise">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===progressExercise?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></div>`:""}
+  <p class="small muted">${tr("Barbell: รวมบาร์และแผ่นทั้งสองข้าง · ท่า Dumbbell ที่สร้างเอง: น้ำหนักต่อลูก","Barbell: bar + both sides · Custom Dumbbell: weight per dumbbell")}</p><div style="margin-top:12px">${lineChart(points)}</div>${points.length?`<div class="row small muted"><span>${dateFmt(points[0].date,{day:"numeric",month:"short"})}</span><span>${dateFmt(points.at(-1).date,{day:"numeric",month:"short"})}</span></div>`:""}</section>`;
   return shell(body);
 }
 
@@ -260,7 +264,7 @@ function renderReport() {
   <article class="report-paper"><div class="row"><div><div class="eyebrow">LiftLog · ${t("report")}</div><h1>${escapeHTML(user().name)}</h1><p class="muted">${periodLabel(data)}</p></div><div class="mark">${icon("strength",24)}</div></div><hr>
   <div class="grid-2"><div class="metric"><b>${data.sessions.length}</b><span>${t("sessions")}</span></div><div class="metric"><b>${fmt(data.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div><div class="metric"><b>${fmt(data.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(data.totals.duration)}</b><span>${t("duration")} · ${t("minutes")}</span></div></div>
   <section class="section"><h2>${t("summary")}</h2><div class="stack" style="margin-top:12px"><div><div class="row small"><span>${t("strength")}</span><b>${data.totals.strength}</b></div><div class="report-bar"><i style="width:${data.sessions.length?data.totals.strength/data.sessions.length*100:0}%"></i></div></div><div><div class="row small"><span>${t("cardio")}</span><b>${data.totals.cardio}</b></div><div class="report-bar"><i style="width:${data.sessions.length?data.totals.cardio/data.sessions.length*100:0}%"></i></div></div></div></section>
-  <section class="section"><h2>${t("bestLifts")}</h2>${data.best.length?data.best.slice(0,6).map(x=>`<div class="row" style="padding:10px 0;border-bottom:1px solid #dfe8ea"><span>${escapeHTML(exerciseName(x.exerciseId))}</span><b>${loadLabel(x.weight,x.barWeight??null)} × ${x.reps}</b></div>`).join(""):`<p class="muted">${t("noData")}</p>`}</section>
+  <section class="section"><h2>${t("bestLifts")}</h2>${data.best.length?data.best.slice(0,6).map(x=>`<div class="row" style="padding:10px 0;border-bottom:1px solid #dfe8ea"><span>${escapeHTML(exerciseName(x.exerciseId))}</span><b>${loadLabel(x.weight,x.barWeight??null,x.weightUnit)} × ${x.reps}</b></div>`).join(""):`<p class="muted">${t("noData")}</p>`}</section>
   <p class="small muted">${lang()==="th"?"สร้างจากข้อมูลที่บันทึกใน LiftLog บนอุปกรณ์นี้":"Generated from workout data stored in LiftLog on this device."}</p></article>`);
 }
 
@@ -274,7 +278,8 @@ function renderSettings() {
   <div style="padding-top:13px"><div class="muted small" style="margin-bottom:9px">${t("color")}</div><div class="grid-2">${Object.entries(colors).map(([k,c])=>`<button class="btn ${state.settings.theme===k?"":"secondary"}" data-setting="theme" data-value="${k}" style="display:flex;align-items:center;justify-content:center;gap:8px"><i class="color-dot" style="background:${c}"></i>${t(k)}</button>`).join("")}</div></div></section>
   <section class="card section"><h2 class="title-icon">${icon("shield")} ${t("backup")}</h2><p class="muted small">${t("privacy")}</p><div class="grid-2"><button class="btn secondary with-icon" data-action="export">${icon("download",18)}${t("export")}</button><button class="btn secondary with-icon" data-action="import">${icon("upload",18)}${t("import")}</button></div><button class="btn ghost with-icon" style="width:100%;margin-top:10px" data-action="persist-storage" ${persistence?"disabled":""}>${icon("shield",18)}${persistence?t("storageOn"):t("storageOff")}</button><input id="import-file" class="hidden" type="file" accept="application/json"></section>
   <section class="card section"><h2 class="title-icon">${icon("download")} ${t("install")}</h2><p>${t("installHelp")}</p><div class="notice">${lang()==="th"?"หลังติดตั้ง เปิดได้จากหน้าจอโฮมและใช้ได้แม้ไม่มีอินเทอร์เน็ต":"After installation, open it from the Home Screen and use it offline."}</div></section>`;
-  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.0 · 2026.10.04</span></section>`;
+  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.1 · 2026.10.05</span></section>`;
+  body+=`<section class="card section"><div class="section-head"><h2>${tr('ท่าของฉัน','My exercises')}</h2><button class="btn secondary small-btn" data-action="new-exercise">${tr('สร้างท่าเอง','Create exercise')}</button></div>${user().exercises.filter(e=>e.custom).map(e=>`<div class="settings-row"><b>${escapeHTML(exerciseOptionName(e))}</b></div>`).join('')||`<p class="small muted">${tr('สร้างท่าแล้วเลือกใช้ได้ในทุกแผนของโปรไฟล์นี้','Create exercises to use in any plan in this profile.')}</p>`}</section>`;
   return shell(body);
 }
 
@@ -300,12 +305,26 @@ function dayEditorBody(day) {
   if(day.mode==="rest") return `<div class="empty"><div class="empty-icon">${icon("rest",34)}</div>${t("rest")}</div>`;
   if(day.mode==="cardio") return `<div class="field"><label>${t("activity")}</label><select name="activity">${Object.entries(CARDIO).map(([k,v])=>`<option value="${k}" ${day.cardio?.activity===k?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></div><div class="field"><label>${t("duration")} (${t("minutes")})</label><input name="minutes" type="number" min="1" value="${day.cardio?.minutes||30}"></div><label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${day.cardio?.treadmill?"checked":""}>${t("treadmill")}</label><div class="grid-2"><div class="field"><label>${t("speed")}</label><input name="speed" type="number" step="0.1" value="${day.cardio?.speed||5}"></div><div class="field"><label>${t("incline")}</label><input name="incline" type="number" step="0.5" value="${day.cardio?.incline||0}"></div></div>`;
   const list=day.exercises||[];
-  return `<div class="stack" data-exercise-list>${list.map((x,i)=>exerciseEditorRow(x,i)).join("")}</div><button type="button" class="btn ghost with-icon" data-action="add-editor-exercise">${icon("plus",18)}${t("addExercise")}</button>`;
+  return `<div class="stack" data-exercise-list>${list.map((x,i)=>exerciseEditorRow(x,i)).join("")}</div><button type="button" class="btn ghost with-icon" data-action="add-editor-exercise">${icon("plus",18)}${t("addExercise")}</button><details class="custom-exercise"><summary>${tr("สร้างท่าเอง","Create exercise")}</summary><div class="stack" data-custom-fields>${customExerciseFields()}<button type="button" class="btn secondary" data-action="create-editor-exercise">${tr("สร้างและเพิ่มในวันนี้","Create and add to this day")}</button></div></details>`;
+}
+
+function customExerciseFields() {
+  return `<div class="field"><label for="custom-name">${tr('ชื่อท่า','Exercise name')}</label><input id="custom-name" name="customName" maxlength="80" placeholder="${tr('เช่น ดัมเบลโรว์แขนเดียว','e.g. Single-arm row')}"></div><div class="field"><label for="custom-equipment">${tr('อุปกรณ์','Equipment')}</label><select id="custom-equipment" name="customEquipment"><option value="dumbbell">Dumbbell</option><option value="barbell">Barbell</option><option value="other">${tr('อื่น ๆ / น้ำหนักตัว','Other / bodyweight')}</option></select></div><div class="field" data-custom-bar hidden><label for="custom-bar">${tr('น้ำหนักบาร์ (กก.)','Bar weight (kg)')}</label><input id="custom-bar" name="customBar" disabled type="number" min="0" max="50" step="0.25" value="20"></div><p class="small muted" data-custom-help>${tr('Dumbbell: กรอกน้ำหนักต่อลูก','Dumbbell: enter the weight of one dumbbell')}</p><p class="small" role="status" data-custom-error></p>`;
+}
+async function createExerciseFrom(container) {
+  const name=container.querySelector('[name="customName"]').value;
+  const equipment=container.querySelector('[name="customEquipment"]').value;
+  const barWeight=Number(container.querySelector('[name="customBar"]').value);
+  let exercise;
+  try { exercise=addCustomExercise(user(),{name,equipment,barWeight}); }
+  catch(error) { container.querySelector('[data-custom-error]').textContent=error.message==='duplicate-exercise'?tr('มีชื่อท่าและอุปกรณ์นี้แล้ว เลือกจากรายการได้เลย','This exercise and equipment already exist. Choose it from the list.'):tr('กรอกชื่อท่า 1–80 ตัวอักษร และน้ำหนักบาร์ 0–50 กก.','Enter a name (1–80 characters) and a bar weight of 0–50 kg.');return null; }
+  await persist();
+  return exercise;
 }
 
 function exerciseEditorRow(x,index) {
   const entry=entryDefaults(exerciseById(x.exerciseId),Number(x.weight)||0);
-  return `<div class="card" style="box-shadow:none;padding:12px" data-edit-exercise><div class="row"><div class="field" style="flex:1"><label>${t("chooseExercise")}</label><select name="exerciseId">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===x.exerciseId?"selected":""}>${escapeHTML(lang()==="th"?e.nameTh||e.name:e.name)}</option>`).join("")}</select></div><button type="button" class="icon-btn danger-icon" data-action="remove-editor-exercise" aria-label="${t("delete")}">${icon("trash",17)}</button></div><div class="grid-2"><div class="field"><label data-plan-weight-label>${t("weight")} (${entry.bar===null?t("kg"):tr("กก./ข้าง","kg/side")})</label><input name="weight" type="number" min="0" max="1000" step="0.25" required data-bar="${entry.bar??""}" value="${entry.input}"></div><div class="field"><label>${t("reps")} (${lang()==="th"?"คั่นด้วย /":"separate with /"})</label><input name="reps" value="${(x.repsBySet||[12,10,8]).join("/")}"></div></div></div>`;
+  return `<div class="card" style="box-shadow:none;padding:12px" data-edit-exercise><div class="row"><div class="field" style="flex:1"><label>${t("chooseExercise")}</label><select name="exerciseId">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===x.exerciseId?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></div><button type="button" class="icon-btn danger-icon" data-action="remove-editor-exercise" aria-label="${t("delete")}">${icon("trash",17)}</button></div><div class="grid-2"><div class="field"><label data-plan-weight-label>${t("weight")} (${weightUnit(exerciseById(x.exerciseId),entry.bar)})</label><input name="weight" type="number" min="0" max="1000" step="0.25" required data-bar="${entry.bar??""}" value="${entry.input}"></div><div class="field"><label>${t("reps")} (${lang()==="th"?"คั่นด้วย /":"separate with /"})</label><input name="reps" value="${(x.repsBySet||[12,10,8]).join("/")}"></div></div></div>`;
 }
 
 function profilesModal() {
@@ -350,6 +369,14 @@ on("click",async event=>{
     const form=el.closest("form"); form.querySelector('input[name="mode"]').value=el.dataset.mode; form.querySelectorAll(".segmented button").forEach(b=>b.classList.toggle("active",b===el));
     form.querySelector("[data-editor-body]").innerHTML=dayEditorBody(el.dataset.mode==="strength"?{mode:"strength",exercises:[]} : el.dataset.mode==="cardio"?{mode:"cardio",cardio:{activity:"walking",minutes:30,treadmill:true,speed:5,incline:0}}:restDay()); return;
   }
+  if(action==='new-exercise'){showModal(tr('สร้างท่าเอง','Create exercise'),`<form class="stack" data-form="new-exercise">${customExerciseFields()}<button class="btn">${t('save')}</button></form>`);return;}
+  if(action==='create-editor-exercise'){
+    const container=el.closest('[data-custom-fields]'),form=el.closest('form');
+    const exercise=await createExerciseFrom(container);if(!exercise)return;
+    for(const select of form.querySelectorAll('select[name="exerciseId"]'))select.add(new Option(exerciseOptionName(exercise),exercise.id));
+    form.querySelector('[data-exercise-list]').insertAdjacentHTML('beforeend',exerciseEditorRow({exerciseId:exercise.id,weight:exercise.equipment==='barbell'?exercise.barWeight:0,repsBySet:[12,10,8]},99));
+    container.querySelector('[name="customName"]').value='';container.querySelector('[data-custom-error]').textContent='';container.closest('details').open=false;toast(t('copied'));return;
+  }
   if(action==="add-editor-exercise"){el.previousElementSibling.insertAdjacentHTML("beforeend",exerciseEditorRow({exerciseId:user().exercises[0].id,weight:0,repsBySet:[12,10,8]},99));return;}
   if(action==="remove-editor-exercise"){el.closest("[data-edit-exercise]").remove();return;}
   if(action==="delete-set") { const removed=user().activeSession.sets.find(s=>s.id===el.dataset.set); user().activeSession.sets=user().activeSession.sets.filter(s=>s.id!==el.dataset.set); if(removed && !user().activeSession.sets.some(s=>s.exerciseId===removed.exerciseId&&!s.warmup))delete user().activeSession.feedback[removed.exerciseId]; await persist(true); return; }
@@ -379,11 +406,17 @@ on("click",async event=>{
 });
 
 on("change",async event=>{
+  if(event.target.name==='customEquipment'){
+    const container=event.target.closest('[data-custom-fields],form'),bar=event.target.value==='barbell';
+    container.querySelector('[data-custom-bar]').hidden=!bar;container.querySelector('[name="customBar"]').disabled=!bar;
+    container.querySelector('[data-custom-help]').textContent=bar?tr('Barbell: กรอกแผ่นข้างเดียว แอปจะรวมบาร์ให้','Barbell: enter plates on one side; the app includes the bar.'):event.target.value==='dumbbell'?tr('Dumbbell: กรอกน้ำหนักต่อลูก','Dumbbell: enter the weight of one dumbbell'):tr('กรอกน้ำหนักที่ใช้ หรือ 0 สำหรับน้ำหนักตัว','Enter the load used, or 0 for bodyweight.');return;
+  }
   if(event.target.matches('[data-edit-exercise] select[name="exerciseId"]')){
     const row=event.target.closest('[data-edit-exercise]'),input=row.querySelector('[name="weight"]');
     const total=totalFor(Number(input.value),input.dataset.bar===''?null:Number(input.dataset.bar));
-    const entry=entryDefaults(exerciseById(event.target.value),total);input.value=entry.input;input.dataset.bar=entry.bar??'';
-    row.querySelector('[data-plan-weight-label]').textContent=`${t('weight')} (${entry.bar===null?t('kg'):tr('กก./ข้าง','kg/side')})`;return;
+    const selected=exerciseById(event.target.value);
+    const entry=entryDefaults(selected,selected?.equipment==='barbell'?Math.max(total,barWeight(selected)):total);input.value=entry.input;input.dataset.bar=entry.bar??'';
+    row.querySelector('[data-plan-weight-label]').textContent=`${t('weight')} (${weightUnit(exerciseById(event.target.value),entry.bar)})`;return;
   }
   if(event.target.dataset.training){
     if(event.target.dataset.training==='intensity'){user().defaultIntensity=event.target.value;if(user().activeSession?.kind==='strength')user().activeSession.intensity=event.target.value;}
@@ -403,10 +436,11 @@ on("change",async event=>{
 
 on("submit",async event=>{
   event.preventDefault(); const form=event.target; const data=new FormData(form); const kind=form.dataset.form;
+  if(kind==='new-exercise'){const exercise=await createExerciseFrom(form);if(exercise){closeModal();draw();toast(t('copied'));}return;}
   if(kind==="set"){
     if(!user().activeSession || !form.reportValidity())return;
-    const bar=data.get('plates')==='on'?Number(data.get('bar')):null;
-    const set={id:uid('set'),exerciseId:form.dataset.exercise,weight:totalFor(Number(data.get('weight')),bar),barWeight:bar,reps:Number(data.get('reps')),warmup:data.get('warmup')==='on',createdAt:new Date().toISOString()};
+    const bar=exerciseById(form.dataset.exercise)?.equipment==='dumbbell'||exerciseById(form.dataset.exercise)?.equipment==='other'?null:data.get('plates')==='on'?Number(data.get('bar')):null;
+    const set={id:uid('set'),exerciseId:form.dataset.exercise,weight:totalFor(Number(data.get('weight')),bar),barWeight:bar,...(exerciseById(form.dataset.exercise)?.equipment==='dumbbell'?{weightUnit:'per-hand'}:{}),reps:Number(data.get('reps')),warmup:data.get('warmup')==='on',createdAt:new Date().toISOString()};
     if(!Number.isInteger(set.reps)||set.reps<1||set.reps>100)throw new Error('invalid-reps');
     user().activeSession.sets.push(set);
     const exercise=exerciseById(set.exerciseId);exercise.weightEntry=bar===null?'total':'plates';if(bar!==null)exercise.barWeight=bar;
@@ -424,7 +458,7 @@ on("submit",async event=>{
   }
   if(kind==="new-plan") { const key=data.get("preset"); const plan=key==="custom"?{...presetPlan("lean",data.get("name")),presetKey:"custom",days:{0:restDay(),1:restDay(),2:restDay(),3:restDay(),4:restDay(),5:restDay(),6:restDay()}}:presetPlan(key,data.get("name")||undefined);user().programs.push(plan);user().activeProgramId=plan.id;closeModal();await persist(true);return; }
   if(kind==="rename-plan") { (user().programs.find(p=>p.id===form.dataset.plan)||activePlan(user())).name=data.get("name");closeModal();await persist(true);return; }
-  if(kind==="new-user") { const lean=presetPlan("lean");const u={id:uid("user"),name:data.get("name"),bodyWeight:Number(data.get("bodyWeight"))||70,defaultIntensity:"moderate",exercises:structuredClone(state.users[0].exercises),programs:[lean,presetPlan("build")],activeProgramId:lean.id,overrides:{},sessions:[],activeSession:null};state.users.push(u);state.activeUserId=u.id;closeModal();await persist(true);return; }
+  if(kind==="new-user") { const lean=presetPlan("lean");const u={id:uid("user"),name:data.get("name"),bodyWeight:Number(data.get("bodyWeight"))||70,defaultIntensity:"moderate",exercises:structuredClone(EXERCISES),programs:[lean,presetPlan("build")],activeProgramId:lean.id,overrides:{},sessions:[],activeSession:null};state.users.push(u);state.activeUserId=u.id;closeModal();await persist(true);return; }
 });
 
 // Serialize user actions so repeated taps cannot race an IndexedDB transaction.
@@ -458,8 +492,8 @@ function restoreEntries(){
 function updateLoad(form){
   const bar=form.elements.plates.checked?Number(form.elements.bar.value):null;
   let total;try{total=totalFor(Number(form.elements.weight.value),bar);}catch{total=NaN;}
-  form.querySelector('[data-weight-label]').textContent=`${t('weight')} · ${bar===null?t('kg'):tr('กก./ข้าง','kg/side')}`;
-  form.querySelector('[data-total-weight]').textContent=Number.isFinite(total)?loadLabel(total)+(bar!==null?` · ${tr('บาร์','bar')} ${fmt(bar,2)} ${t('kg')}`:''):tr('ตรวจน้ำหนักอีกครั้ง','Check the weight');
+  form.querySelector('[data-weight-label]').textContent=`${t('weight')} · ${weightUnit(exerciseById(form.dataset.exercise),bar)}`;
+  form.querySelector('[data-total-weight]').textContent=Number.isFinite(total)?loadLabel(total,null,exerciseById(form.dataset.exercise)?.equipment==='dumbbell'?'per-hand':null)+(bar!==null?` · ${tr('บาร์','bar')} ${fmt(bar,2)} ${t('kg')}`:''):tr('ตรวจน้ำหนักอีกครั้ง','Check the weight');
   form.elements.bar.disabled=bar===null||!user().activeSession;
 }
 document.addEventListener('input',event=>{

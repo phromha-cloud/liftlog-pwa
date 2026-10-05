@@ -160,6 +160,18 @@ export function createInitialState() {
   };
 }
 
+
+export function addCustomExercise(user, { name, equipment, barWeight = 20 }) {
+  name = typeof name === 'string' ? name.trim() : '';
+  if (!name || name.length > 80 || !['dumbbell', 'barbell', 'other'].includes(equipment)) throw new Error('invalid-exercise');
+  if (equipment === 'barbell' && (!Number.isFinite(barWeight) || barWeight < 0 || barWeight > 50)) throw new Error('invalid-exercise');
+  if (user.exercises.some(e => e.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase() && e.equipment === equipment)) throw new Error('duplicate-exercise');
+  const exercise = { id: uid('custom'), name, nameTh: name, category: 'other', custom: true, equipment, weightEntry: equipment === 'barbell' ? 'plates' : 'total' };
+  if (equipment === 'barbell') exercise.barWeight = barWeight;
+  user.exercises.push(exercise);
+  return exercise;
+}
+
 export function normalizeState(input) {
   if (!input || typeof input !== "object" || !Array.isArray(input.users) || !input.users.length || (input.version ?? 1) > APP_VERSION) throw new Error("invalid-backup");
   const value = structuredClone(input);
@@ -187,7 +199,7 @@ export function normalizeState(input) {
       if (session.planned) checkDay({mode:'strength',exercises:session.planned});
     }
     user.exercises ||= structuredClone(EXERCISES);
-    if (!Array.isArray(user.exercises) || user.exercises.some(e => !e || !validId(e.id) || typeof e.name !== 'string')) throw new Error('invalid-backup');
+    if (!Array.isArray(user.exercises) || user.exercises.some(e => !e || !validId(e.id) || typeof e.name !== 'string' || (e.equipment !== undefined && !['dumbbell','barbell','other'].includes(e.equipment)) || (e.barWeight !== undefined && (!validNumber(e.barWeight) || e.barWeight > 50)))) throw new Error('invalid-backup');
     user.overrides ||= {};
     for (const override of Object.values(user.overrides)) checkDay(override?.dayPlan);
     user.bodyWeight ||= 70;
@@ -231,7 +243,8 @@ export function previousWeekExercise(user, exerciseId, date = new Date()) {
   const sessions = user.sessions.filter(s => s.kind === "strength" && localDateKey(new Date(s.startedAt)) === key);
   const sets = sessions.flatMap(s => s.sets || []).filter(s => s.exerciseId === exerciseId && !s.warmup);
   if (!sets.length) return null;
-  return { weight: Math.max(...sets.map(s => Number(s.weight) || 0)), reps: sets.map(s => Number(s.reps) || 0).join(" / ") };
+  const best = sets.reduce((a,b) => Number(b.weight) > Number(a.weight) ? b : a);
+  return { ...(best.weightUnit ? {weightUnit: best.weightUnit} : {}), ...(best.barWeight != null ? {barWeight: best.barWeight} : {}), weight: Math.max(...sets.map(s => Number(s.weight) || 0)), reps: sets.map(s => Number(s.reps) || 0).join(" / ") };
 }
 
 export function sessionsInRange(user, start, end) {

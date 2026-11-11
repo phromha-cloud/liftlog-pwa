@@ -78,8 +78,16 @@ const exerciseName = id => {
   return ex ? (lang() === "th" ? ex.nameTh || ex.name : ex.name) : id;
 };
 const dayNames = () => lang() === "th" ? ["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."] : ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const fmt = (n, max = 0) => new Intl.NumberFormat(lang() === "th" ? "th-TH" : "en-US", { maximumFractionDigits:max }).format(Number(n) || 0);
-const dateFmt = (date, opts = { weekday:"long", day:"numeric", month:"long" }) => new Intl.DateTimeFormat(lang() === "th" ? "th-TH" : "en-US", opts).format(date);
+// History reuses a handful of display formats across many sessions.
+const formats = new Map();
+function formatter(Type, options) {
+  const locale = lang() === 'th' ? 'th-TH' : 'en-US';
+  const key = Type.name + locale + JSON.stringify(options);
+  if (!formats.has(key)) formats.set(key, new Type(locale, options));
+  return formats.get(key);
+}
+const fmt = (n, max = 0) => formatter(Intl.NumberFormat, {maximumFractionDigits:max}).format(Number(n) || 0);
+const dateFmt = (date, opts = {weekday:"long", day:"numeric", month:"long"}) => formatter(Intl.DateTimeFormat, opts).format(date);
 
 async function persist(render = false) {
   const snapshot = structuredClone(state);
@@ -134,6 +142,19 @@ function toast(message) {
   if (status) {status.textContent=message;return;}
   const el = document.querySelector("#toast"); el.textContent = message; el.classList.add("show");
   clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove("show"), 1800);
+}
+
+function showActionError(message) {
+  const host = modalRoot.querySelector('.modal') || root.querySelector('.workspace');
+  if (!host) return;
+  host.querySelector('.action-error')?.remove();
+  const alert = document.createElement('aside');
+  alert.className = 'action-error';
+  alert.setAttribute('role','alert');
+  alert.innerHTML = `<span>${escapeHTML(message)}</span><button class="icon-btn" aria-label="${tr('ปิดข้อความ','Dismiss message')}">${icon('close',16)}</button>`;
+  const origin = document.activeElement;
+  alert.querySelector('button').addEventListener('click',()=>{alert.remove(); if (origin?.isConnected) origin.focus({preventScroll:true});});
+  host.append(alert);
 }
 
 function icon(kind, size = 20) { return svgIcon(kind, size); }
@@ -244,7 +265,9 @@ function lineChart(points) {
   const coords=points.map((x,i)=>({x:p+(i/(Math.max(1,points.length-1)))*(W-p*2),y:H-p-((x.value-min)/span)*(H-p*2),...x}));
   const path=coords.map((c,i)=>`${i?"L":"M"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
   const area=`${path} L${coords.at(-1).x},${H-p} L${coords[0].x},${H-p} Z`;
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${tr('กราฟพัฒนาการ','Progress chart')}: ${fmt(points[0].value,1)} → ${fmt(points.at(-1).value,1)}"><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--surface)"/></linearGradient></defs>${[0,.25,.5,.75,1].map(n=>`<line class="grid" x1="${p}" x2="${W-p}" y1="${p+n*(H-2*p)}" y2="${p+n*(H-2*p)}"/>`).join("")}<path class="area" d="${area}"/><path class="line" d="${path}"/>${coords.map(c=>`<circle class="dot" cx="${c.x}" cy="${c.y}" r="5"><title>${dateFmt(c.date,{day:"numeric",month:"short"})}: ${fmt(c.value,1)}</title></circle>`).join("")}</svg>`;
+  const unit = t(progressMetric === "calories" ? "kcal" : "kg");
+  const metric = t({weight:"topWeight",oneRM:"estimated1RM",volume:"volume",calories:"calories"}[progressMetric]);
+  return `<div class="chart-key"><div><div class="eyebrow">${tr('90 วันล่าสุด','Last 90 days')}</div><h2>${metric}</h2></div><div><strong>${fmt(points.at(-1).value,1)} ${unit}</strong><span>${tr('ล่าสุด','Latest')}</span></div></div><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${tr('กราฟพัฒนาการ','Progress chart')}: ${fmt(points[0].value,1)} → ${fmt(points.at(-1).value,1)}"><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--surface)"/></linearGradient></defs>${[0,.25,.5,.75,1].map(n=>`<line class="grid" x1="${p}" x2="${W-p}" y1="${p+n*(H-2*p)}" y2="${p+n*(H-2*p)}"/>`).join("")}<path class="area" d="${area}"/><path class="line" d="${path}"/>${coords.map(c=>`<circle class="dot" cx="${c.x}" cy="${c.y}" r="5"><title>${dateFmt(c.date,{day:"numeric",month:"short"})}: ${fmt(c.value,1)}</title></circle>`).join("")}</svg><details class="chart-values"><summary>${tr('ดูค่าบนกราฟ','View chart values')}</summary><table><thead><tr><th scope="col">${tr('วันที่','Date')}</th><th scope="col">${metric} · ${unit}</th></tr></thead><tbody>${points.map(pt=>`<tr><td>${dateFmt(pt.date,{day:"numeric",month:"short",year:"numeric"})}</td><td>${fmt(pt.value,1)}</td></tr>`).join('')}</tbody></table></details>`;
 }
 
 function renderProgress() {
@@ -252,7 +275,7 @@ function renderProgress() {
   const points=chartSeries(user(),progressMetric,progressExercise);
   const report=reportData(user(),"month",new Date());
   let body=pageHead(t("progress"),lang()==="th"?"กราฟเส้น":"Line charts",`<button class="btn small-btn with-icon" data-action="report">${icon("report",17)}${t("report")}</button>`);
-  body+=`<section class="grid-2"><div class="metric"><b>${fmt(report.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(report.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div></section>
+  body+=`<h2 class="metric-heading">${tr('เดือนนี้','This month')}</h2><section class="grid-2"><div class="metric"><b>${fmt(report.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(report.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div></section>
   <section class="card section"><div class="segmented">${[["weight",t("topWeight")],["oneRM",t("estimated1RM")],["volume",t("volume")],["calories",t("calories")]].map(([k,v])=>`<button data-action="metric" data-metric="${k}" class="${progressMetric===k?"active":""}">${v}</button>`).join("")}</div>
   ${["weight","oneRM"].includes(progressMetric)?`<label class="field" style="margin-top:14px"><span>${t("chooseExercise")}</span><select data-action="progress-exercise">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===progressExercise?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></label>`:""}
   <p class="small muted">${tr("Barbell: รวมบาร์และแผ่นทั้งสองข้าง · ท่า Dumbbell ที่สร้างเอง: น้ำหนักต่อลูก","Barbell: bar + both sides · Custom Dumbbell: weight per dumbbell")}</p><div style="margin-top:12px">${lineChart(points)}</div>${points.length?`<div class="row small muted"><span>${dateFmt(points[0].date,{day:"numeric",month:"short"})}</span><span>${dateFmt(points.at(-1).date,{day:"numeric",month:"short"})}</span></div>`:""}</section>`;
@@ -516,7 +539,7 @@ function on(type,handler){
     busy=true;
     try{await handler(event);}catch(error){
       if(savedState)state=structuredClone(savedState);
-      toast(error.message?.startsWith('invalid-') ? tr('ตรวจน้ำหนักและจำนวนครั้งอีกครั้ง','Check the weight and reps') : tr('บันทึกไม่สำเร็จ ข้อมูลที่บันทึกก่อนหน้ายังอยู่ กรุณาลองอีกครั้ง','Save failed. Previously saved data remains. Please retry.'));
+      showActionError(error.message?.startsWith('invalid-') ? tr('ตรวจน้ำหนักและจำนวนครั้งอีกครั้ง','Check the weight and reps') : tr('บันทึกไม่สำเร็จ ข้อมูลที่บันทึกก่อนหน้ายังอยู่ กรุณาลองอีกครั้ง','Save failed. Previously saved data remains. Please retry.'));
     }finally{busy=false;}
   });
 }
@@ -551,7 +574,7 @@ document.addEventListener('input',event=>{
   }
   form.dataset.dirty='true';updateLoad(form);captureEntries();
 });
-setInterval(()=>{if(!state)return;tickRest();const el=document.querySelector('[data-workout-time]');if(el&&user().activeSession)el.textContent=elapsed(user().activeSession.startedAt);},1000);
+setInterval(()=>{if(!state || document.hidden)return;tickRest();const el=document.querySelector('[data-workout-time]');if(el&&user().activeSession)el.textContent=elapsed(user().activeSession.startedAt);},1000);
 document.addEventListener('visibilitychange',()=>{if(state)tickRest();});
 async function boot() {
   try {

@@ -108,7 +108,7 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shad
 .bottom-nav { position:fixed; z-index:20; left:50%; bottom:0; transform:translateX(-50%); width:min(760px,100%); padding:7px 9px calc(7px + var(--safe-bottom)); display:grid; grid-template-columns:repeat(5,1fr); background:color-mix(in srgb,var(--surface) 92%,transparent); backdrop-filter:blur(18px); border-top:1px solid var(--line); }
 .bottom-nav button { border:0; background:transparent; color:var(--muted); min-height:51px; border-radius:13px; display:grid; place-items:center; align-content:center; gap:2px; font-size:.67rem; }
 .bottom-nav button .nav-icon { height:22px; display:grid; place-items:center; line-height:1; }
-.bottom-nav button.active { color:var(--accent); background:var(--accent-soft); font-weight:750; }
+.bottom-nav button.active { color:var(--accent-2); background:var(--accent-soft); font-weight:750; }
 .modal-backdrop { position:fixed; z-index:50; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:flex-end; justify-content:center; padding-top:50px; }
 .modal { width:min(650px,100%); max-height:88vh; overflow:auto; background:var(--surface); border-radius:26px 26px 0 0; padding:18px 18px calc(20px + var(--safe-bottom)); box-shadow:0 -15px 40px rgba(0,0,0,.2); }
 .modal-handle { width:42px; height:5px; border-radius:99px; background:var(--line); margin:0 auto 16px; }
@@ -307,4 +307,45 @@ body:has(dialog[open]) { overflow:hidden; }
 @media print {
   .rail,.skip-link,.toast { display:none!important; }
   .report-paper { color:#17232b; }
+}
+.metric-heading { margin:0 0 8px; font-size:1rem; }
+.chart-key { display:flex; align-items:end; justify-content:space-between; gap:12px; margin:20px 0 4px; }
+.chart-key>div:last-child { display:grid; justify-items:end; }
+.chart-key strong { font-variant-numeric:tabular-nums; }
+.chart-key span { font-size:.8rem; color:var(--muted); }
+.chart-values { margin-block:10px; border-block:1px solid var(--line); }
+.chart-values summary { cursor:pointer; padding:12px 0; font-weight:650; color:var(--accent-2); }
+.chart-values table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.chart-values :is(th,td) { text-align:start; padding:8px; border-top:1px solid var(--line); }
+.chart-values :is(th,td):last-child { text-align:end; }
+@media(prefers-color-scheme:dark) { :root:not([data-mode]) { color-scheme:dark; --bg:#0d1419; --text:#edf4f5; --muted:#b4c2c8; } }
+:root { --control-line:#74838e; }
+[data-mode="dark"] { --control-line:#758792; }
+input:not(:disabled),select:not(:disabled),textarea:not(:disabled) { border-color:var(--control-line); }
+:is(input,select,textarea):focus-visible { border-color:var(--accent); }
+.hero :focus-visible { outline-color:white; }
+@media screen and (max-width:959px) {
+  .bottom-nav button { font-size:.75rem; }
+}
+.action-error { position:fixed; z-index:40; bottom:calc(78px + var(--safe-bottom)); left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:12px; width:max-content; max-width:min(92vw,580px); padding:10px 12px; background:var(--surface); color:var(--text); border:1px solid var(--danger); border-radius:14px; box-shadow:var(--shadow); }
+.modal .action-error { position:sticky; bottom:0; left:0; transform:none; max-width:100%; margin-top:12px; }
+@media screen and (min-width:960px) { .action-error { bottom:24px; } }
+@media print { .action-error { display:none; } }
+/* Keep the first set within reach during an active session. */
+.hero-summary { margin:12px 0 8px; padding-top:10px; }
+.hero>p.small { margin:4px 0 0; }
+.hero-summary>div { gap:2px; }
+@media screen and (max-width:699px) {
+  .hero-summary>div { display:flex; flex-wrap:wrap; align-items:baseline; gap:5px; }
+  .hero-summary>div:last-child { justify-content:flex-end; }
+  .hero-summary strong { font-size:2.15rem; }
+  .training-controls { padding:12px; }
+}
+@media screen and (min-width:1100px) {
+  .hero { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) auto; align-items:center; gap:6px 28px; padding:24px; }
+  .hero-row { flex-wrap:wrap; gap:8px 14px; align-items:center; justify-content:flex-start; }
+  .hero-summary { grid-area:1 / 2; border:0; margin:0; padding:0; }
+  .hero button.btn { grid-area:1 / 3; min-width:0; margin:0; }
+  .hero>progress,.hero>p { grid-column:1 / -1; }
+  .hero>progress { margin-top:12px; }
 }

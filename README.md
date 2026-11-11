@@ -57,3 +57,7 @@ python3 -m http.server 4173
 อัปเดตโดยเปิดแอปเดิมขณะออนไลน์ แล้วปิดและเปิดใหม่ หากมีแถบอัปเดตให้บันทึกค่าที่กำลังกรอกก่อนกด **อัปเดต** ตรวจเวอร์ชัน `2.0 · 2026.10.04` ในหน้าตั้งค่า ไม่ต้องลบแอปเดิมหรือล้างข้อมูล Safari
 
 เวลาพักนับต่อเมื่อกลับเข้าแอป แต่ยังไม่มีการแจ้งเตือนบนหน้าจอล็อก ข้อมูล PWA กับแอป iOS แยกจากกัน
+
+## Regression checks
+
+With Node 22.16+ run `node --test tests/*.test.mjs`. For the browser checks, serve this directory on loopback (`python3 -m http.server 4180 --bind 127.0.0.1`). With Playwright and its browsers installed in your development environment, run `node tests/ui.cjs` and `BROWSER=webkit node tests/ui.cjs`. Use `PLAYWRIGHT_MODULE` for a separate test installation and `AXE_MODULE` for the path to axe.min.js to include automated WCAG checks. Tests use disposable profiles with synthetic workouts; the app has no runtime package dependencies.

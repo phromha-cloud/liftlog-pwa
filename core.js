@@ -172,34 +172,87 @@ export function addCustomExercise(user, { name, equipment, barWeight = 20 }) {
   return exercise;
 }
 
-export function normalizeState(input) {
+export const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
+const invalidBackup = () => { throw new Error("invalid-backup"); };
+const record = x => x !== null && typeof x === "object" && !Array.isArray(x);
+const optionalText = x => x == null || typeof x === "string";
+function checkCardio(c) {
+  if (!record(c) || typeof c.activity !== 'string' || !Object.hasOwn(CARDIO,c.activity)) invalidBackup();
+  for (const key of ["minutes","distance","speed","incline","met"])
+    if (c[key] != null && !Number.isFinite(c[key])) invalidBackup();
+  if (!optionalText(c.note)) invalidBackup();
+}
+// Only copy workout inputs, never operational session fields from a plan.
+export function cardioInputs(c) {
+  return Object.fromEntries(["activity","minutes","distance","speed","incline","treadmill","note","met"].filter(k => Object.hasOwn(c,k)).map(k=>[k,c[k]]));
+}
+
+export function normalizeState(input, { importing = false } = {}) {
   if (!input || typeof input !== "object" || !Array.isArray(input.users) || !input.users.length || (input.version ?? 1) > APP_VERSION) throw new Error("invalid-backup");
   const value = structuredClone(input);
   const ids = new Set();
   const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id);
   const validNumber = n => typeof n === 'number' && Number.isFinite(n) && n >= 0;
   const checkDay = day => {
-    if (!day || !['strength','cardio','rest'].includes(day.mode)) throw new Error('invalid-backup');
+    if (!record(day) || !['strength','cardio','rest'].includes(day.mode)) throw new Error('invalid-backup');
     if (day.mode === 'strength' && (!Array.isArray(day.exercises) || day.exercises.some(x => !x || !validId(x.exerciseId) || !validNumber(x.weight) || !Number.isInteger(x.sets) || x.sets < 0 || !Array.isArray(x.repsBySet) || !x.repsBySet.length || x.repsBySet.some(n => !Number.isInteger(n) || n < 1)))) throw new Error('invalid-backup');
-    if (day.mode === 'cardio' && (!day.cardio || !CARDIO[day.cardio.activity] || !validNumber(day.cardio.minutes))) throw new Error('invalid-backup');
+    if (importing && day.mode === 'strength' && (day.exercises.length > 256 || day.exercises.some(e=>e.repsBySet.length>512))) invalidBackup();
+    if (day.mode === 'cardio') {
+      checkCardio(day.cardio);
+      if (!validNumber(day.cardio.minutes)) invalidBackup();
+      day.cardio = cardioInputs(day.cardio);
+    } else delete day.cardio;
+    if (day.mode !== 'strength') delete day.exercises;
   };
+  if (value.settings != null && !record(value.settings)) invalidBackup();
   value.version = APP_VERSION;
   value.settings = { language: "th", appearance: "system", theme: "cool", ...value.settings };
   if (!['th', 'en'].includes(value.settings.language)) value.settings.language = 'th';
+  if (!['system','light','dark'].includes(value.settings.appearance)) value.settings.appearance='system';
+  if (!['cool','warm','forest','mono'].includes(value.settings.theme)) value.settings.theme='cool';
   for (const user of value.users) {
     if (!user || !validId(user.id) || ids.has(user.id) || typeof user.name !== 'string' || !Array.isArray(user.programs) || !user.programs.length || !Array.isArray(user.sessions)) throw new Error('invalid-backup');
     ids.add(user.id);
+    if (user.bodyWeight != null && !validNumber(user.bodyWeight)) invalidBackup();
+    const unique = list => {
+      const seen = new Set();
+      for (const item of list) {
+        if (!record(item) || (item.id != null && seen.has(item.id))) invalidBackup();
+        if (item.id != null) seen.add(item.id);
+      }
+    };
+    unique(user.programs);
+    unique([...user.sessions,...(user.activeSession?[user.activeSession]:[])]);
     for (const p of user.programs) {
       if (!p || !validId(p.id) || typeof p.name !== 'string' || !p.days || typeof p.days !== 'object') throw new Error('invalid-backup');
       Object.values(p.days).forEach(checkDay);
     }
     for (const session of [...user.sessions, ...(user.activeSession ? [user.activeSession] : [])]) {
       if (!session || !validId(session.id) || !['strength', 'cardio'].includes(session.kind) || !Number.isFinite(Date.parse(session.startedAt)) || (session.kind === 'strength' && !Array.isArray(session.sets))) throw new Error('invalid-backup');
+      if (!optionalText(session.planName) || (session.bodyWeight != null && !validNumber(session.bodyWeight)) ||
+          (session.endedAt != null && !Number.isFinite(Date.parse(session.endedAt)))) invalidBackup();
+      if (session.kind === 'cardio') checkCardio(session);
+      if (session.sets != null && !Array.isArray(session.sets)) invalidBackup();
       if (session.sets?.some(x => !x || !validId(x.exerciseId) || (x.id !== undefined && !validId(x.id)) || !validNumber(x.weight) || !Number.isInteger(x.reps) || x.reps < 1 || (x.barWeight != null && !validNumber(x.barWeight)))) throw new Error('invalid-backup');
+      if (session.sets) unique(session.sets);
+      if (session === user.activeSession && session.sets)
+        for (const set of session.sets) set.id ??= uid('set');
       if (session.planned) checkDay({mode:'strength',exercises:session.planned});
     }
+    if (importing && user.activeSession?.kind === 'strength') {
+      // Duplicate planned exercises are supported, but must not multiply one set list into millions of DOM nodes.
+      const active = user.activeSession, counts = new Map();
+      if (active.sets.length > 4096) invalidBackup();
+      for (const set of active.sets) counts.set(set.exerciseId,(counts.get(set.exerciseId)||0)+1);
+      if ((active.planned||[]).reduce((n,e)=>n+(counts.get(e.exerciseId)||0),0)>4096) invalidBackup();
+    }
+    if (user.activeSession?.kind === 'strength') {
+      user.activeSession.feedback ??= {};
+      if (!record(user.activeSession.feedback)) invalidBackup();
+    }
     user.exercises ||= structuredClone(EXERCISES);
-    if (!Array.isArray(user.exercises) || user.exercises.some(e => !e || !validId(e.id) || typeof e.name !== 'string' || (e.equipment !== undefined && !['dumbbell','barbell','other'].includes(e.equipment)) || (e.barWeight !== undefined && (!validNumber(e.barWeight) || e.barWeight > 50)))) throw new Error('invalid-backup');
+    if (!Array.isArray(user.exercises) || user.exercises.some(e => !e || !validId(e.id) || typeof e.name !== 'string' || !optionalText(e.nameTh) || (e.equipment !== undefined && !['dumbbell','barbell','other'].includes(e.equipment)) || (e.barWeight !== undefined && (!validNumber(e.barWeight) || e.barWeight > 50)))) throw new Error('invalid-backup');
+    unique(user.exercises);
     user.overrides ||= {};
     for (const override of Object.values(user.overrides)) checkDay(override?.dayPlan);
     user.bodyWeight ||= 70;
@@ -224,7 +277,9 @@ export function resolveDay(user, date = new Date()) {
 export function deletePlan(user, planId) {
   if (user.programs.length <= 1) return false;
   const wasActive = user.activeProgramId === planId;
-  user.programs = user.programs.filter(p => p.id !== planId);
+  const index = user.programs.findIndex(p=>p.id===planId);
+  if (index < 0) return false;
+  user.programs.splice(index,1);
   if (wasActive) user.activeProgramId = user.programs[0].id;
   return true;
 }
@@ -244,7 +299,7 @@ export function previousWeekExercise(user, exerciseId, date = new Date()) {
   const sets = sessions.flatMap(s => s.sets || []).filter(s => s.exerciseId === exerciseId && !s.warmup);
   if (!sets.length) return null;
   const best = sets.reduce((a,b) => Number(b.weight) > Number(a.weight) ? b : a);
-  return { ...(best.weightUnit ? {weightUnit: best.weightUnit} : {}), ...(best.barWeight != null ? {barWeight: best.barWeight} : {}), weight: Math.max(...sets.map(s => Number(s.weight) || 0)), reps: sets.map(s => Number(s.reps) || 0).join(" / ") };
+  return { ...(best.weightUnit ? {weightUnit: best.weightUnit} : {}), ...(best.barWeight != null ? {barWeight: best.barWeight} : {}), weight: Number(best.weight) || 0, reps: sets.map(s => Number(s.reps) || 0).join(" / ") };
 }
 
 export function sessionsInRange(user, start, end) {
@@ -279,7 +334,7 @@ export function chartSeries(user, metric, exerciseId, days = 90) {
     if (metric === "weight" || metric === "oneRM") {
       const sets = (session.sets || []).filter(s => s.exerciseId === exerciseId && !s.warmup);
       if (!sets.length) continue;
-      result.push({ date: new Date(session.startedAt), value: Math.max(...sets.map(s => metric === "weight" ? Number(s.weight) : calculateOneRM(s.weight, s.reps))) });
+      result.push({ date: new Date(session.startedAt), value: sets.reduce((max,s)=>Math.max(max, metric === "weight" ? Number(s.weight) : calculateOneRM(s.weight,s.reps)),0) });
     } else {
       const stats = sessionStats(session);
       const value = metric === "volume" ? stats.volume : metric === "calories" ? stats.calories : session.kind === "cardio" ? stats.duration : 0;

@@ -130,6 +130,8 @@ function applyTheme() {
 }
 
 function toast(message) {
+  const status = modalRoot.querySelector(".dialog-status");
+  if (status) {status.textContent=message;return;}
   const el = document.querySelector("#toast"); el.textContent = message; el.classList.add("show");
   clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove("show"), 1800);
 }
@@ -138,17 +140,20 @@ function icon(kind, size = 20) { return svgIcon(kind, size); }
 
 function shell(content) {
   const nav = ["today","plans","history","progress","settings"];
-  return `<main class="shell">
-    <header class="topbar"><div class="brand"><div class="mark">${icon("strength",24)}</div><strong>LiftLog</strong></div><button class="profile-chip" data-action="profiles">${icon("user",18)} <span>${escapeHTML(user().name)}</span> ${icon("chevron",14)}</button></header>
+  const currentSection = route === "report" ? "progress" : route;
+  return `<div class="shell">
+    <a class="skip-link" href="#page-title">${tr('ข้ามไปยังเนื้อหา','Skip to content')}</a>
+    <aside class="rail"><div class="brand"><div class="mark">${icon("strength",24)}</div><strong>LiftLog</strong></div>
+    <nav class="bottom-nav" aria-label="${tr('เมนูหลัก','Main navigation')}">${nav.map(item => `<button data-route="${item}" ${currentSection===item?'aria-current="page"':''} class="${currentSection===item?'active':''}"><span class="nav-icon">${icon(item,21)}</span><span>${t(item)}</span></button>`).join("")}</nav></aside>
+    <main class="workspace"><header class="topbar"><span class="context-label">${tr('สมุดบันทึกการฝึก','Training journal')}</span><button class="profile-chip" data-action="profiles" aria-haspopup="dialog">${icon("user",18)} <span>${escapeHTML(user().name)}</span> ${icon("chevron",14)}</button></header>
     ${updateRegistration?.waiting ? `<div class="update-notice"><span>${tr("มีเวอร์ชันใหม่พร้อมใช้","An update is ready")}</span><button class="btn small-btn" data-action="apply-update">${tr("อัปเดต","Update")}</button></div>` : ""}
     ${restBanner()}
     ${content}
-    <nav class="bottom-nav" aria-label="Main">${nav.map(item => `<button data-route="${item}" class="${route===item?"active":""}"><span class="nav-icon">${icon(item,21)}</span><span>${t(item)}</span></button>`).join("")}</nav>
-  </main>`;
+    </main></div>`;
 }
 
 function pageHead(title, eyebrow = "LiftLog", action = "") {
-  return `<div class="page-head row"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1></div>${action}</div>`;
+  return `<div class="page-head row"><div><div class="eyebrow">${eyebrow}</div><h1 id="page-title" tabindex="-1">${title}</h1></div>${action}</div>`;
 }
 
 function renderToday() {
@@ -159,9 +164,9 @@ function renderToday() {
   let body = pageHead(t("today"), dateFmt(now), `<button class="icon-btn" data-action="edit-day" aria-label="${t("editDay")}">${icon("edit")}</button>`);
   body += `<section class="card hero"><div class="hero-row"><div><div class="muted small">${t("currentPlan")}</div><h2>${escapeHTML(active?.planName || plan?.name || "—")}</h2></div><span class="pill">${icon(day.mode)} ${t(day.mode)}</span></div>
     ${resolved.overridden ? `<p class="small">${t("todayOnly")}</p>` : ""}
-    <div class="hero-summary"><div><strong>${active && day.mode==='strength' ? `${progress.completed}<span> / ${progress.target}</span>` : day.mode==='strength' ? day.exercises?.length||0 : day.mode==='cardio' ? day.cardio?.minutes||0 : '—'}</strong><span>${day.mode==='strength' ? active ? tr('เซตตามแผน','planned sets') : tr('ท่าในวันนี้','exercises today') : t('minutes')}</span></div><div><b data-workout-time>${active ? elapsed(active.startedAt) : '—'}</b><span>${t('duration')}</span></div></div>
+    ${day.mode !== "rest" ? `<div class="hero-summary"><div><strong>${active && day.mode==='strength' ? `${progress.completed}<span> / ${progress.target}</span>` : day.mode==='strength' ? day.exercises?.length||0 : day.mode==='cardio' ? day.cardio?.minutes||0 : '—'}</strong><span>${day.mode==='strength' ? active ? tr('เซตตามแผน','planned sets') : tr('ท่าในวันนี้','exercises today') : t('minutes')}</span></div><div><b data-workout-time>${active ? elapsed(active.startedAt) : '—'}</b><span>${t('duration')}</span></div></div>` : ''}
     ${active && day.mode==='strength' ? `<progress class="workout-progress" value="${progress.completed}" max="${progress.target||1}" aria-label="${tr('ความคืบหน้าการฝึก','Workout progress')}"></progress><p class="small">${progress.exercises}/${progress.exerciseTarget} ${tr('ท่าครบแล้ว','exercises complete')}${progress.additional ? ` · +${progress.additional} ${tr('เซตเพิ่มเติม','extra sets')}`:''}</p>`:''}
-    ${day.mode !== "rest" ? `<button class="btn with-icon" style="width:100%;margin-top:14px;background:#fff;color:var(--accent-2)" data-action="${active ? "finish-session" : "start-session"}">${icon(active?"check":"play",18)}${active ? t("finish") : t("start")}</button>` : ""}
+    ${day.mode !== "rest" ? `<button class="btn with-icon"  data-action="${active ? "finish-session" : "start-session"}">${icon(active?"check":"play",18)}${active ? t("finish") : t("start")}</button>` : ""}
   </section>`;
   if (day.mode === "strength") body += trainingControls(active);
   if (day.mode === "rest") body += `<section class="card empty section"><div class="empty-icon">${icon("rest",34)}</div><h2>${t("rest")}</h2><p>${lang()==="th"?"ฟื้นฟูร่างกาย แล้วกลับมาแข็งแรงกว่าเดิม":"Recover today and come back stronger."}</p><button class="btn ghost with-icon" data-action="edit-day">${icon("edit",18)}${t("changeMode")}</button></section>`;
@@ -178,7 +183,7 @@ function elapsed(startedAt) {
 function renderStrength(day, session) {
   const exercises = day.exercises || [];
   if (!exercises.length) return `<section class="card empty section"><div class="empty-icon">＋</div><h2>${t("noPlan")}</h2><button class="btn" data-action="edit-day">${t("addExercise")}</button></section>`;
-  return `<section class="section"><div class="section-head"><h2>${lang()==="th"?"ท่าที่ต้องเล่น":"Today's exercises"}</h2><span class="muted small">${exercises.length} ${lang()==="th"?"ท่า":"exercises"}</span></div><div class="stack">${exercises.map((item, i) => strengthCard(item, i, session)).join("")}</div></section>`;
+  return `<section class="section"><div class="section-head"><h2>${lang()==="th"?"ท่าที่ต้องเล่น":"Today's exercises"}</h2><span class="muted small">${exercises.length} ${lang()==="th"?"ท่า":"exercises"}</span></div><div class="stack exercises-grid">${exercises.map((item, i) => strengthCard(item, i, session)).join("")}</div></section>`;
 }
 
 function strengthCard(item, index, session) {
@@ -206,11 +211,11 @@ function renderCardio(day) {
   const c = day.cardio || {};
   const current = user().activeSession;
   return `<section class="section"><div class="section-head"><h2 class="title-icon">${cardioIcon(current?.activity||c.activity||"walking")} ${t("cardio")}</h2></div><form class="card stack" data-form="cardio">
-    <div class="field"><label>${t("activity")}</label><select name="activity">${Object.entries(CARDIO).map(([key,v])=>`<option value="${key}" ${(current?.activity||c.activity)===key?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></div>
-    <div class="grid-2"><div class="field"><label>${t("duration")} (${t("minutes")})</label><input name="minutes" type="number" min="1" value="${current?.minutes||c.minutes||30}"></div><div class="field"><label>${t("distance")}</label><input name="distance" type="number" min="0" step="0.1" value="${current?.distance||c.distance||0}"></div></div>
+    <label class="field"><span>${t("activity")}</span><select name="activity">${Object.entries(CARDIO).map(([key,v])=>`<option value="${key}" ${(current?.activity||c.activity)===key?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></label>
+    <div class="grid-2"><label class="field"><span>${t("duration")} (${t("minutes")})</span><input name="minutes" type="number" min="1" value="${current?.minutes||c.minutes||30}"></label><label class="field"><span>${t("distance")}</span><input name="distance" type="number" min="0" step="0.1" value="${current?.distance||c.distance||0}"></label></div>
     <label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${(current?.treadmill??c.treadmill)?"checked":""}> ${t("treadmill")}</label>
-    <div class="grid-2"><div class="field"><label>${t("speed")}</label><input name="speed" type="number" min="0" step="0.1" value="${current?.speed||c.speed||5}"></div><div class="field"><label>${t("incline")}</label><input name="incline" type="number" min="0" step="0.5" value="${current?.incline||c.incline||0}"></div></div>
-    <div class="field"><label>${t("notes")}</label><textarea name="note" rows="2">${escapeHTML(current?.note||"")}</textarea></div>
+    <div class="grid-2"><label class="field"><span>${t("speed")}</span><input name="speed" type="number" min="0" step="0.1" value="${current?.speed||c.speed||5}"></label><label class="field"><span>${t("incline")}</span><input name="incline" type="number" min="0" step="0.5" value="${current?.incline||c.incline||0}"></label></div>
+    <label class="field"><span>${t("notes")}</span><textarea name="note" rows="2">${escapeHTML(current?.note||"")}</textarea></label>
     ${current?`<button class="btn">${t("save")}</button>`:`<div class="notice">${lang()==="th"?"กดเริ่มฝึกก่อนบันทึกผล":"Start the workout before saving results."}</div>`}
   </form></section>`;
 }
@@ -239,7 +244,7 @@ function lineChart(points) {
   const coords=points.map((x,i)=>({x:p+(i/(Math.max(1,points.length-1)))*(W-p*2),y:H-p-((x.value-min)/span)*(H-p*2),...x}));
   const path=coords.map((c,i)=>`${i?"L":"M"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
   const area=`${path} L${coords.at(-1).x},${H-p} L${coords[0].x},${H-p} Z`;
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img"><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--surface)"/></linearGradient></defs>${[0,.25,.5,.75,1].map(n=>`<line class="grid" x1="${p}" x2="${W-p}" y1="${p+n*(H-2*p)}" y2="${p+n*(H-2*p)}"/>`).join("")}<path class="area" d="${area}"/><path class="line" d="${path}"/>${coords.map(c=>`<circle class="dot" cx="${c.x}" cy="${c.y}" r="5"><title>${dateFmt(c.date,{day:"numeric",month:"short"})}: ${fmt(c.value,1)}</title></circle>`).join("")}</svg>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${tr('กราฟพัฒนาการ','Progress chart')}: ${fmt(points[0].value,1)} → ${fmt(points.at(-1).value,1)}"><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--surface)"/></linearGradient></defs>${[0,.25,.5,.75,1].map(n=>`<line class="grid" x1="${p}" x2="${W-p}" y1="${p+n*(H-2*p)}" y2="${p+n*(H-2*p)}"/>`).join("")}<path class="area" d="${area}"/><path class="line" d="${path}"/>${coords.map(c=>`<circle class="dot" cx="${c.x}" cy="${c.y}" r="5"><title>${dateFmt(c.date,{day:"numeric",month:"short"})}: ${fmt(c.value,1)}</title></circle>`).join("")}</svg>`;
 }
 
 function renderProgress() {
@@ -249,7 +254,7 @@ function renderProgress() {
   let body=pageHead(t("progress"),lang()==="th"?"กราฟเส้น":"Line charts",`<button class="btn small-btn with-icon" data-action="report">${icon("report",17)}${t("report")}</button>`);
   body+=`<section class="grid-2"><div class="metric"><b>${fmt(report.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(report.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div></section>
   <section class="card section"><div class="segmented">${[["weight",t("topWeight")],["oneRM",t("estimated1RM")],["volume",t("volume")],["calories",t("calories")]].map(([k,v])=>`<button data-action="metric" data-metric="${k}" class="${progressMetric===k?"active":""}">${v}</button>`).join("")}</div>
-  ${["weight","oneRM"].includes(progressMetric)?`<div class="field" style="margin-top:14px"><label>${t("chooseExercise")}</label><select data-action="progress-exercise">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===progressExercise?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></div>`:""}
+  ${["weight","oneRM"].includes(progressMetric)?`<label class="field" style="margin-top:14px"><span>${t("chooseExercise")}</span><select data-action="progress-exercise">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===progressExercise?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></label>`:""}
   <p class="small muted">${tr("Barbell: รวมบาร์และแผ่นทั้งสองข้าง · ท่า Dumbbell ที่สร้างเอง: น้ำหนักต่อลูก","Barbell: bar + both sides · Custom Dumbbell: weight per dumbbell")}</p><div style="margin-top:12px">${lineChart(points)}</div>${points.length?`<div class="row small muted"><span>${dateFmt(points[0].date,{day:"numeric",month:"short"})}</span><span>${dateFmt(points.at(-1).date,{day:"numeric",month:"short"})}</span></div>`:""}</section>`;
   return shell(body);
 }
@@ -260,7 +265,7 @@ function renderReport() {
   const data=reportData(user(),reportPeriod,reportAnchor);
   return shell(`${pageHead(t("report"),periodLabel(data),`<button class="btn small-btn no-print with-icon" data-action="print">${icon("report",17)}${t("printPDF")}</button>`)}
   <div class="segmented no-print" style="margin-bottom:12px"><button data-action="report-period" data-period="week" class="${reportPeriod==="week"?"active":""}">${t("weekly")}</button><button data-action="report-period" data-period="month" class="${reportPeriod==="month"?"active":""}">${t("monthly")}</button></div>
-  <div class="row no-print" style="margin-bottom:14px"><button class="icon-btn" data-action="report-shift" data-shift="-1">${icon("back")}</button><b>${periodLabel(data)}</b><button class="icon-btn" data-action="report-shift" data-shift="1">${icon("chevron")}</button></div>
+  <div class="row no-print" style="margin-bottom:14px"><button class="icon-btn" data-action="report-shift" data-shift="-1" aria-label="${tr('ช่วงก่อนหน้า','Previous period')}">${icon("back")}</button><b>${periodLabel(data)}</b><button class="icon-btn" data-action="report-shift" data-shift="1" aria-label="${tr('ช่วงถัดไป','Next period')}">${icon("chevron")}</button></div>
   <article class="report-paper"><div class="row"><div><div class="eyebrow">LiftLog · ${t("report")}</div><h1>${escapeHTML(user().name)}</h1><p class="muted">${periodLabel(data)}</p></div><div class="mark">${icon("strength",24)}</div></div><hr>
   <div class="grid-2"><div class="metric"><b>${data.sessions.length}</b><span>${t("sessions")}</span></div><div class="metric"><b>${fmt(data.totals.calories)}</b><span>${t("calories")} · ${t("kcal")}</span></div><div class="metric"><b>${fmt(data.totals.volume)}</b><span>${t("volume")} · ${t("kg")}</span></div><div class="metric"><b>${fmt(data.totals.duration)}</b><span>${t("duration")} · ${t("minutes")}</span></div></div>
   <section class="section"><h2>${t("summary")}</h2><div class="stack" style="margin-top:12px"><div><div class="row small"><span>${t("strength")}</span><b>${data.totals.strength}</b></div><div class="report-bar"><i style="width:${data.sessions.length?data.totals.strength/data.sessions.length*100:0}%"></i></div></div><div><div class="row small"><span>${t("cardio")}</span><b>${data.totals.cardio}</b></div><div class="report-bar"><i style="width:${data.sessions.length?data.totals.cardio/data.sessions.length*100:0}%"></i></div></div></div></section>
@@ -272,28 +277,68 @@ function renderSettings() {
   const colors={cool:"#1976a8",warm:"#c25b34",forest:"#34715a",mono:"#3c4650"};
   let body=pageHead(t("settings"),escapeHTML(user().name));
   body+=`<section class="card"><h2 class="title-icon">${icon("user")} ${t("profiles")}</h2>${state.users.map(u=>`<div class="settings-row"><div class="title-icon">${icon("user",18)}<b>${escapeHTML(u.name)}</b>${u.id===state.activeUserId?` <span class="badge good">${icon("check",13)}${t("active")}</span>`:""}</div><button class="btn secondary small-btn" data-action="switch-user" data-user="${u.id}" ${u.id===state.activeUserId?"disabled":""}>${lang()==="th"?"เลือก":"Select"}</button></div>`).join("")}<button class="btn ghost with-icon" style="width:100%;margin-top:12px" data-action="new-user">${icon("plus",18)}${t("addUser")}</button></section>
-  <section class="card section"><h2 class="title-icon">${icon("settings")} ${lang()==="th"?"ตัวเลือก":"Preferences"}</h2><div class="settings-row"><span>${t("bodyWeight")}</span><div style="width:115px"><input data-setting="bodyWeight" type="number" min="20" step="0.1" value="${user().bodyWeight}"></div></div>
+  <section class="card section"><h2 class="title-icon">${icon("settings")} ${lang()==="th"?"ตัวเลือก":"Preferences"}</h2><div class="settings-row"><span>${t("bodyWeight")}</span><div style="width:115px"><input aria-label="${t('bodyWeight')}" data-setting="bodyWeight" type="number" min="20" step="0.1" value="${user().bodyWeight}"></div></div>
   <div class="settings-row"><span>${t("language")}</span><div class="segmented" style="width:170px"><button data-setting="language" data-value="th" class="${lang()==="th"?"active":""}">ไทย</button><button data-setting="language" data-value="en" class="${lang()==="en"?"active":""}">English</button></div></div>
   <div class="settings-row"><span>${t("appearance")}</span><div class="segmented" style="width:220px">${["system","light","dark"].map(k=>`<button data-setting="appearance" data-value="${k}" class="${state.settings.appearance===k?"active":""}">${t(k)}</button>`).join("")}</div></div>
   <div style="padding-top:13px"><div class="muted small" style="margin-bottom:9px">${t("color")}</div><div class="grid-2">${Object.entries(colors).map(([k,c])=>`<button class="btn ${state.settings.theme===k?"":"secondary"}" data-setting="theme" data-value="${k}" style="display:flex;align-items:center;justify-content:center;gap:8px"><i class="color-dot" style="background:${c}"></i>${t(k)}</button>`).join("")}</div></div></section>
   <section class="card section"><h2 class="title-icon">${icon("shield")} ${t("backup")}</h2><p class="muted small">${t("privacy")}</p><div class="grid-2"><button class="btn secondary with-icon" data-action="export">${icon("download",18)}${t("export")}</button><button class="btn secondary with-icon" data-action="import">${icon("upload",18)}${t("import")}</button></div><button class="btn ghost with-icon" style="width:100%;margin-top:10px" data-action="persist-storage" ${persistence?"disabled":""}>${icon("shield",18)}${persistence?t("storageOn"):t("storageOff")}</button><input id="import-file" class="hidden" type="file" accept="application/json"></section>
   <section class="card section"><h2 class="title-icon">${icon("download")} ${t("install")}</h2><p>${t("installHelp")}</p><div class="notice">${lang()==="th"?"หลังติดตั้ง เปิดได้จากหน้าจอโฮมและใช้ได้แม้ไม่มีอินเทอร์เน็ต":"After installation, open it from the Home Screen and use it offline."}</div></section>`;
-  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.1 · 2026.10.05</span></section>`;
+  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.2 · 2026.11.11</span></section>`;
   body+=`<section class="card section"><div class="section-head"><h2>${tr('ท่าของฉัน','My exercises')}</h2><button class="btn secondary small-btn" data-action="new-exercise">${tr('สร้างท่าเอง','Create exercise')}</button></div>${user().exercises.filter(e=>e.custom).map(e=>`<div class="settings-row"><b>${escapeHTML(exerciseOptionName(e))}</b></div>`).join('')||`<p class="small muted">${tr('สร้างท่าแล้วเลือกใช้ได้ในทุกแผนของโปรไฟล์นี้','Create exercises to use in any plan in this profile.')}</p>`}</section>`;
   return shell(body);
 }
 
 function draw() {
   const pages={today:renderToday,plans:renderPlans,history:renderHistory,progress:renderProgress,report:renderReport,settings:renderSettings};
+  const prev = document.activeElement;
+  const control = prev?.closest('button,input,select,summary');
+  const selector = control && root.contains(control) && controlSelector(control);
+  const previousPage = root.dataset.page;
   captureEntries();
   root.innerHTML=(pages[route]||renderToday)();
+  root.dataset.page = route;
+  syncChoices(root);
   restoreEntries(); tickRest();
+  if (previousPage && previousPage !== route) {
+    root.querySelector('#page-title')?.focus();
+    window.scrollTo(0, 0);
+  } else if (selector) {
+    (root.querySelector(selector + ':not(:disabled)') || root.querySelector('#page-title'))?.focus({preventScroll:true});
+  }
 }
 
-function showModal(title, content) {
-  modalRoot.innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><div class="modal-handle"></div><div class="modal-head"><h2>${title}</h2><button class="icon-btn" data-action="close-modal" aria-label="${t("cancel")}">${icon("close")}</button></div>${content}</section></div>`;
+// Match the same control after a render without persisting transient UI state.
+function controlSelector(el) {
+  if (el.id) return '#' + CSS.escape(el.id);
+  const attrs = ['data-action','data-setting','data-route','data-value','data-user','data-day','data-plan','data-exercise','data-set','data-session','data-metric','data-period','data-shift','data-training','name','type'];
+  const key = attrs.filter(k=>el.hasAttribute(k)).map(k=>`[${k}="${CSS.escape(el.getAttribute(k))}"]`).join('');
+  const form = el.closest('form[data-exercise]');
+  return key && (form ? `form[data-exercise="${CSS.escape(form.dataset.exercise)}"] ` : '') + el.localName + key;
 }
-const closeModal=()=>modalRoot.replaceChildren();
+function syncChoices(container) {
+  for (const b of container.querySelectorAll('.segmented button,.performance button,[data-setting="theme"]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.setting === 'theme' ? b.dataset.value === state.settings.theme : b.classList.contains('active')));
+  }
+}
+let modalTrigger, openingControl;
+function showModal(title, content) {
+  const prior = modalRoot.querySelector('dialog');
+  if (prior) prior.close();
+  else modalTrigger = openingControl?.isConnected ? openingControl : document.activeElement;
+  modalRoot.innerHTML=`<dialog class="modal-backdrop" aria-labelledby="modal-title"><section class="modal"><div class="modal-handle"></div><div class="modal-head"><h2 id="modal-title">${title}</h2><button class="icon-btn" data-action="close-modal" aria-label="${t("cancel")}">${icon("close")}</button></div>${content}<div class="dialog-status" role="status"></div></section></dialog>`;
+  const dialog = modalRoot.querySelector('dialog');
+  dialog.addEventListener('cancel',event=>{event.preventDefault();closeModal();});
+  syncChoices(dialog);
+  dialog.showModal();
+}
+function closeModal() {
+  const dialog = modalRoot.querySelector('dialog');
+  if (!dialog) return;
+  dialog.close();
+  modalRoot.replaceChildren();
+  if (modalTrigger?.isConnected) modalTrigger.focus({preventScroll:true});
+  modalTrigger = null;
+}
 
 function planEditor(dayIndex, todayOnly=false) {
   const now=new Date(); const plan=todayOnly?activePlan(user()):(user().programs.find(p=>p.id===selectedPlanId)||activePlan(user()));
@@ -303,7 +348,7 @@ function planEditor(dayIndex, todayOnly=false) {
 
 function dayEditorBody(day) {
   if(day.mode==="rest") return `<div class="empty"><div class="empty-icon">${icon("rest",34)}</div>${t("rest")}</div>`;
-  if(day.mode==="cardio") return `<div class="field"><label>${t("activity")}</label><select name="activity">${Object.entries(CARDIO).map(([k,v])=>`<option value="${k}" ${day.cardio?.activity===k?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></div><div class="field"><label>${t("duration")} (${t("minutes")})</label><input name="minutes" type="number" min="1" value="${day.cardio?.minutes||30}"></div><label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${day.cardio?.treadmill?"checked":""}>${t("treadmill")}</label><div class="grid-2"><div class="field"><label>${t("speed")}</label><input name="speed" type="number" step="0.1" value="${day.cardio?.speed||5}"></div><div class="field"><label>${t("incline")}</label><input name="incline" type="number" step="0.5" value="${day.cardio?.incline||0}"></div></div>`;
+  if(day.mode==="cardio") return `<label class="field"><span>${t("activity")}</span><select name="activity">${Object.entries(CARDIO).map(([k,v])=>`<option value="${k}" ${day.cardio?.activity===k?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></label><label class="field"><span>${t("duration")} (${t("minutes")})</span><input name="minutes" type="number" min="1" value="${day.cardio?.minutes||30}"></label><label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${day.cardio?.treadmill?"checked":""}>${t("treadmill")}</label><div class="grid-2"><label class="field"><span>${t("speed")}</span><input name="speed" type="number" step="0.1" value="${day.cardio?.speed||5}"></label><label class="field"><span>${t("incline")}</span><input name="incline" type="number" step="0.5" value="${day.cardio?.incline||0}"></label></div>`;
   const list=day.exercises||[];
   return `<div class="stack" data-exercise-list>${list.map((x,i)=>exerciseEditorRow(x,i)).join("")}</div><button type="button" class="btn ghost with-icon" data-action="add-editor-exercise">${icon("plus",18)}${t("addExercise")}</button><details class="custom-exercise"><summary>${tr("สร้างท่าเอง","Create exercise")}</summary><div class="stack" data-custom-fields>${customExerciseFields()}<button type="button" class="btn secondary" data-action="create-editor-exercise">${tr("สร้างและเพิ่มในวันนี้","Create and add to this day")}</button></div></details>`;
 }
@@ -324,7 +369,7 @@ async function createExerciseFrom(container) {
 
 function exerciseEditorRow(x,index) {
   const entry=entryDefaults(exerciseById(x.exerciseId),Number(x.weight)||0);
-  return `<div class="card" style="box-shadow:none;padding:12px" data-edit-exercise><div class="row"><div class="field" style="flex:1"><label>${t("chooseExercise")}</label><select name="exerciseId">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===x.exerciseId?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></div><button type="button" class="icon-btn danger-icon" data-action="remove-editor-exercise" aria-label="${t("delete")}">${icon("trash",17)}</button></div><div class="grid-2"><div class="field"><label data-plan-weight-label>${t("weight")} (${weightUnit(exerciseById(x.exerciseId),entry.bar)})</label><input name="weight" type="number" min="0" max="1000" step="0.25" required data-bar="${entry.bar??""}" value="${entry.input}"></div><div class="field"><label>${t("reps")} (${lang()==="th"?"คั่นด้วย /":"separate with /"})</label><input name="reps" value="${(x.repsBySet||[12,10,8]).join("/")}"></div></div></div>`;
+  return `<div class="card" style="box-shadow:none;padding:12px" data-edit-exercise><div class="row"><label class="field" style="flex:1"><span>${t("chooseExercise")}</span><select name="exerciseId">${user().exercises.map(e=>`<option value="${e.id}" ${e.id===x.exerciseId?"selected":""}>${escapeHTML(exerciseOptionName(e))}</option>`).join("")}</select></label><button type="button" class="icon-btn danger-icon" data-action="remove-editor-exercise" aria-label="${t("delete")}">${icon("trash",17)}</button></div><div class="grid-2"><label class="field"><span data-plan-weight-label>${t("weight")} (${weightUnit(exerciseById(x.exerciseId),entry.bar)})</span><input name="weight" type="number" min="0" max="1000" step="0.25" required data-bar="${entry.bar??""}" value="${entry.input}"></label><label class="field"><span>${t("reps")} (${lang()==="th"?"คั่นด้วย /":"separate with /"})</span><input name="reps" value="${(x.repsBySet||[12,10,8]).join("/")}"></label></div></div>`;
 }
 
 function profilesModal() {
@@ -350,6 +395,7 @@ on("click",async event=>{
   if(event.target.classList?.contains("modal-backdrop")){closeModal();return;}
   const routeButton=event.target.closest("[data-route]"); if(routeButton){route=routeButton.dataset.route; draw(); scrollTo(0,0); return;}
   const el=event.target.closest("[data-action],[data-setting]"); if(!el)return;
+  openingControl = el;
   const action=el.dataset.action;
   if(action==='confirm-import'){if(!pendingImport)return;state=pendingImport;await persist();pendingImport=null;entryDrafts.clear();closeModal();draw();toast(t('imported'));return;}
   if(action==='rest-extend'){extendRest(user());await persist();tickRest();return;}
@@ -366,7 +412,7 @@ on("click",async event=>{
   if(action==="edit-day-scope"){planEditor(new Date().getDay(),el.dataset.scope==="today");return;}
   if(action==="edit-plan-day"){planEditor(Number(el.dataset.day),false);return;}
   if(action==="day-mode"){
-    const form=el.closest("form"); form.querySelector('input[name="mode"]').value=el.dataset.mode; form.querySelectorAll(".segmented button").forEach(b=>b.classList.toggle("active",b===el));
+    const form=el.closest("form"); form.querySelector('input[name="mode"]').value=el.dataset.mode; form.querySelectorAll(".segmented button").forEach(b=>b.classList.toggle("active",b===el)); syncChoices(form);
     form.querySelector("[data-editor-body]").innerHTML=dayEditorBody(el.dataset.mode==="strength"?{mode:"strength",exercises:[]} : el.dataset.mode==="cardio"?{mode:"cardio",cardio:{activity:"walking",minutes:30,treadmill:true,speed:5,incline:0}}:restDay()); return;
   }
   if(action==='new-exercise'){showModal(tr('สร้างท่าเอง','Create exercise'),`<form class="stack" data-form="new-exercise">${customExerciseFields()}<button class="btn">${t('save')}</button></form>`);return;}
@@ -381,10 +427,10 @@ on("click",async event=>{
   if(action==="remove-editor-exercise"){el.closest("[data-edit-exercise]").remove();return;}
   if(action==="delete-set") { const removed=user().activeSession.sets.find(s=>s.id===el.dataset.set); user().activeSession.sets=user().activeSession.sets.filter(s=>s.id!==el.dataset.set); if(removed && !user().activeSession.sets.some(s=>s.exerciseId===removed.exerciseId&&!s.warmup))delete user().activeSession.feedback[removed.exerciseId]; await persist(true); return; }
   if(action==="feedback") { user().activeSession.feedback[el.dataset.exercise]=el.dataset.value; await persist(true); return; }
-  if(action==="new-plan") { showModal(t("newPlan"),`<form class="stack" data-form="new-plan"><div class="field"><label>${t("choosePreset")}</label><select name="preset"><option value="lean">${t("lean")}</option><option value="build">${t("build")}</option><option value="custom">${t("custom")}</option></select></div><div class="field"><label>${t("planName")}</label><input name="name" required placeholder="My Plan"></div><button class="btn">${t("save")}</button></form>`); return; }
+  if(action==="new-plan") { showModal(t("newPlan"),`<form class="stack" data-form="new-plan"><label class="field"><span>${t("choosePreset")}</span><select name="preset"><option value="lean">${t("lean")}</option><option value="build">${t("build")}</option><option value="custom">${t("custom")}</option></select></label><label class="field"><span>${t("planName")}</span><input name="name" required placeholder="My Plan"></label><button class="btn">${t("save")}</button></form>`); return; }
   if(action==="select-plan") { selectedPlanId=el.dataset.plan; draw(); return; }
   if(action==="activate-plan") { user().activeProgramId=selectedPlanId || activePlan(user()).id; selectedPlanId=null; await persist(true); return; }
-  if(action==="rename-plan") { const p=user().programs.find(x=>x.id===selectedPlanId)||activePlan(user()); showModal(t("planName"),`<form class="stack" data-form="rename-plan" data-plan="${p.id}"><div class="field"><input name="name" value="${escapeHTML(p.name)}" required></div><button class="btn">${t("save")}</button></form>`); return; }
+  if(action==="rename-plan") { const p=user().programs.find(x=>x.id===selectedPlanId)||activePlan(user()); showModal(t("planName"),`<form class="stack" data-form="rename-plan" data-plan="${p.id}"><div class="field"><input aria-label="${t('planName')}" name="name" value="${escapeHTML(p.name)}" required></div><button class="btn">${t("save")}</button></form>`); return; }
   if(action==="delete-plan") { const p=user().programs.find(x=>x.id===selectedPlanId)||activePlan(user()); if(user().programs.length<=1){toast(t("cannotDelete"));return;} showModal(t("confirmDelete"),`<p>${lang()==="th"?`ลบแผน “${escapeHTML(p.name)}” หรือไม่? ประวัติการฝึกจะยังอยู่`:`Delete “${escapeHTML(p.name)}”? Workout history will remain.`}</p><div class="grid-2"><button class="btn secondary" data-action="close-modal">${t("cancel")}</button><button class="btn danger" data-action="confirm-delete-plan" data-plan="${p.id}">${t("delete")}</button></div>`); return; }
   if(action==="confirm-delete-plan") { deletePlan(user(),el.dataset.plan); selectedPlanId=null; closeModal(); await persist(true); return; }
   if(action==="delete-session") { user().sessions=user().sessions.filter(s=>s.id!==el.dataset.session); await persist(true); return; }
@@ -394,7 +440,7 @@ on("click",async event=>{
   if(action==="report-shift") { const amount=Number(el.dataset.shift); if(reportPeriod==="week")reportAnchor.setDate(reportAnchor.getDate()+amount*7);else reportAnchor.setMonth(reportAnchor.getMonth()+amount);draw();return; }
   if(action==="print") { window.print(); return; }
   if(action==="switch-user") { state.activeUserId=el.dataset.user; selectedPlanId=null; closeModal(); await persist(true); return; }
-  if(action==="new-user") { showModal(t("addUser"),`<form class="stack" data-form="new-user"><div class="field"><label>${t("userName")}</label><input name="name" required autofocus></div><div class="field"><label>${t("bodyWeight")} (${t("kg")})</label><input name="bodyWeight" type="number" min="20" value="70"></div><button class="btn">${t("save")}</button></form>`); return; }
+  if(action==="new-user") { showModal(t("addUser"),`<form class="stack" data-form="new-user"><label class="field"><span>${t("userName")}</span><input name="name" required autofocus></label><label class="field"><span>${t("bodyWeight")} (${t("kg")})</span><input name="bodyWeight" type="number" min="20" value="70"></label><button class="btn">${t("save")}</button></form>`); return; }
   if(action==="export") { const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`LiftLog-backup-${localDateKey()}.json`;a.click();URL.revokeObjectURL(a.href);toast(t("exported"));return; }
   if(action==="import") { document.querySelector("#import-file").click();return; }
   if(action==="persist-storage") { persistence=await requestPersistentStorage();draw();toast(persistence?t("storageOn"):t("storageOff"));return; }

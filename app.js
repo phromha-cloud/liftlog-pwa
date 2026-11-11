@@ -1,10 +1,10 @@
 import { barWeight, platesFor, totalFor, entryDefaults, workoutProgress, startRest, remainingRest, extendRest } from "./training.js";
 import {
-  createInitialState, normalizeState, addCustomExercise, EXERCISES, activeUser, activePlan, resolveDay, deletePlan,
+  createInitialState, normalizeState, MAX_IMPORT_BYTES, cardioInputs, addCustomExercise, EXERCISES, activeUser, activePlan, resolveDay, deletePlan,
   nextSetDefaults, previousWeekExercise, localDateKey, dateFromKey, uid, presetPlan,
   CARDIO, sessionStats, chartSeries, reportData, calculateOneRM, escapeHTML, restDay,
 } from "./core.js";
-import { loadState, saveState, requestPersistentStorage, isStoragePersistent } from "./db.js";
+import { loadSnapshot, saveState, requestPersistentStorage, isStoragePersistent } from "./db.js";
 import { svgIcon, cardioIcon, categoryIcon } from "./icons.js";
 
 const I18N = {
@@ -56,6 +56,7 @@ const I18N = {
 
 let state;
 let savedState;
+let revision;
 let busy = false;
 let updateRegistration;
 let pendingImport;
@@ -92,7 +93,7 @@ const dateFmt = (date, opts = {weekday:"long", day:"numeric", month:"long"}) => 
 async function persist(render = false) {
   const snapshot = structuredClone(state);
   try {
-    await saveState(snapshot);
+    revision = await saveState(snapshot, revision);
     savedState = snapshot;
     applyTheme();
     if (render) draw();
@@ -144,6 +145,12 @@ function toast(message) {
   clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove("show"), 1800);
 }
 
+function downloadJournal(data, label="backup") {
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download=`LiftLog-${label}-${localDateKey()}.json`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
 function showActionError(message) {
   const host = modalRoot.querySelector('.modal') || root.querySelector('.workspace');
   if (!host) return;
@@ -213,6 +220,7 @@ function strengthCard(item, index, session) {
   const sets = (session?.sets || []).filter(s => s.exerciseId === item.exerciseId);
   const defaults = nextSetDefaults(session, item);
   const entry = entryDefaults(exercise, defaults.weight);
+  let workingNumber = 0;
   const working = sets.filter(s => !s.warmup).length;
   const feedback = session?.feedback?.[item.exerciseId];
   const complete = working >= item.sets;
@@ -223,7 +231,7 @@ function strengthCard(item, index, session) {
     <form class="set-entry" data-form="set" data-exercise="${id}"><div class="field"><label for="weight-${id}" data-weight-label>${t('weight')} · ${weightUnit(exercise,entry.bar)}</label><input id="weight-${id}" name="weight" type="number" inputmode="decimal" min="0" max="1000" step="0.25" required value="${entry.input}" ${session?'':'disabled'}></div><div class="field"><label for="reps-${id}">${t('set')} ${defaults.setNumber} · ${t('reps')}</label><input id="reps-${id}" name="reps" type="number" inputmode="numeric" min="1" max="100" step="1" required value="${defaults.reps}" ${session?'':'disabled'}></div><button type="submit" class="btn icon-only" aria-label="${t('record')}" ${session?'':'disabled'}>${icon('plus')}</button>
     <div class="load-caption" data-total-weight>${loadLabel(defaults.weight)}</div>
     <details class="load-options"><summary>${exercise?.equipment==='dumbbell'?tr('วอร์มอัป','Warm-up'):tr('บาร์เบล / วอร์มอัป','Barbell / warm-up')}</summary><div ${exercise?.equipment==='dumbbell'||exercise?.equipment==='other'?'hidden':''}><label class="check-label"><input type="checkbox" name="plates" ${entry.bar!==null?'checked':''} ${session?'':'disabled'}>${tr('ใส่แผ่นข้างเดียว','Enter plates per side')}</label><label class="bar-field">${tr('น้ำหนักบาร์ (กก.)','Bar weight (kg)')}<input name="bar" type="number" inputmode="decimal" min="0" max="50" step="0.25" required value="${barWeight(exercise)}" ${session?'':'disabled'}></label></div><label class="check-label"><input type="checkbox" name="warmup" ${session?'':'disabled'}>${t('warmup')}</label></details></form></div>
-    ${sets.length?`<div class="set-list">${sets.map((set,i)=>`<div class="set-row"><span class="set-number">${set.warmup?'W':sets.slice(0,i+1).filter(s=>!s.warmup).length}</span><span><b>${loadLabel(set.weight,set.barWeight??null,set.weightUnit)}</b> × ${set.reps}</span><button class="icon-btn" data-action="delete-set" data-set="${escapeHTML(set.id)}" aria-label="${t('delete')}">${icon('trash',17)}</button></div>`).join('')}</div>`:''}
+    ${sets.length?`<div class="set-list">${sets.map((set,i)=>`<div class="set-row"><span class="set-number">${set.warmup?'W':++workingNumber}</span><span><b>${loadLabel(set.weight,set.barWeight??null,set.weightUnit)}</b> × ${set.reps}</span><button class="icon-btn" data-action="delete-set" data-set="${escapeHTML(set.id)}" aria-label="${t('delete')}">${icon('trash',17)}</button></div>`).join('')}</div>`:''}
     ${session && working?`<div class="performance">${['reduce','maintain','increase'].map(key=>`<button data-action="feedback" data-exercise="${id}" data-value="${key}" class="${feedback===key?'active':''}">${t(key)}</button>`).join('')}</div>`:''}
   </article>`;
 }
@@ -233,9 +241,9 @@ function renderCardio(day) {
   const current = user().activeSession;
   return `<section class="section"><div class="section-head"><h2 class="title-icon">${cardioIcon(current?.activity||c.activity||"walking")} ${t("cardio")}</h2></div><form class="card stack" data-form="cardio">
     <label class="field"><span>${t("activity")}</span><select name="activity">${Object.entries(CARDIO).map(([key,v])=>`<option value="${key}" ${(current?.activity||c.activity)===key?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></label>
-    <div class="grid-2"><label class="field"><span>${t("duration")} (${t("minutes")})</span><input name="minutes" type="number" min="1" value="${current?.minutes||c.minutes||30}"></label><label class="field"><span>${t("distance")}</span><input name="distance" type="number" min="0" step="0.1" value="${current?.distance||c.distance||0}"></label></div>
+    <div class="grid-2"><label class="field"><span>${t("duration")} (${t("minutes")})</span><input name="minutes" type="number" min="1" value="${Number(current?.minutes||c.minutes||30)}"></label><label class="field"><span>${t("distance")}</span><input name="distance" type="number" min="0" step="0.1" value="${Number(current?.distance||c.distance||0)}"></label></div>
     <label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${(current?.treadmill??c.treadmill)?"checked":""}> ${t("treadmill")}</label>
-    <div class="grid-2"><label class="field"><span>${t("speed")}</span><input name="speed" type="number" min="0" step="0.1" value="${current?.speed||c.speed||5}"></label><label class="field"><span>${t("incline")}</span><input name="incline" type="number" min="0" step="0.5" value="${current?.incline||c.incline||0}"></label></div>
+    <div class="grid-2"><label class="field"><span>${t("speed")}</span><input name="speed" type="number" min="0" step="0.1" value="${Number(current?.speed||c.speed||5)}"></label><label class="field"><span>${t("incline")}</span><input name="incline" type="number" min="0" step="0.5" value="${Number(current?.incline||c.incline||0)}"></label></div>
     <label class="field"><span>${t("notes")}</span><textarea name="note" rows="2">${escapeHTML(current?.note||"")}</textarea></label>
     ${current?`<button class="btn">${t("save")}</button>`:`<div class="notice">${lang()==="th"?"กดเริ่มฝึกก่อนบันทึกผล":"Start the workout before saving results."}</div>`}
   </form></section>`;
@@ -261,7 +269,7 @@ function renderHistory() {
 
 function lineChart(points) {
   if (!points.length) return `<div class="empty"><div class="empty-icon">${icon("progress",34)}</div>${t("noData")}</div>`;
-  const W=620,H=260,p=30, vals=points.map(x=>x.value), min=Math.min(...vals),max=Math.max(...vals),span=max-min||1;
+  const W=620,H=260,p=30, vals=points.map(x=>x.value), min=vals.reduce((a,b)=>Math.min(a,b),Infinity),max=vals.reduce((a,b)=>Math.max(a,b),-Infinity),span=max-min||1;
   const coords=points.map((x,i)=>({x:p+(i/(Math.max(1,points.length-1)))*(W-p*2),y:H-p-((x.value-min)/span)*(H-p*2),...x}));
   const path=coords.map((c,i)=>`${i?"L":"M"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
   const area=`${path} L${coords.at(-1).x},${H-p} L${coords[0].x},${H-p} Z`;
@@ -300,13 +308,13 @@ function renderSettings() {
   const colors={cool:"#1976a8",warm:"#c25b34",forest:"#34715a",mono:"#3c4650"};
   let body=pageHead(t("settings"),escapeHTML(user().name));
   body+=`<section class="card"><h2 class="title-icon">${icon("user")} ${t("profiles")}</h2>${state.users.map(u=>`<div class="settings-row"><div class="title-icon">${icon("user",18)}<b>${escapeHTML(u.name)}</b>${u.id===state.activeUserId?` <span class="badge good">${icon("check",13)}${t("active")}</span>`:""}</div><button class="btn secondary small-btn" data-action="switch-user" data-user="${u.id}" ${u.id===state.activeUserId?"disabled":""}>${lang()==="th"?"เลือก":"Select"}</button></div>`).join("")}<button class="btn ghost with-icon" style="width:100%;margin-top:12px" data-action="new-user">${icon("plus",18)}${t("addUser")}</button></section>
-  <section class="card section"><h2 class="title-icon">${icon("settings")} ${lang()==="th"?"ตัวเลือก":"Preferences"}</h2><div class="settings-row"><span>${t("bodyWeight")}</span><div style="width:115px"><input aria-label="${t('bodyWeight')}" data-setting="bodyWeight" type="number" min="20" step="0.1" value="${user().bodyWeight}"></div></div>
+  <section class="card section"><h2 class="title-icon">${icon("settings")} ${lang()==="th"?"ตัวเลือก":"Preferences"}</h2><div class="settings-row"><span>${t("bodyWeight")}</span><div style="width:115px"><input aria-label="${t('bodyWeight')}" data-setting="bodyWeight" type="number" min="20" step="0.1" value="${Number(user().bodyWeight)}"></div></div>
   <div class="settings-row"><span>${t("language")}</span><div class="segmented" style="width:170px"><button data-setting="language" data-value="th" class="${lang()==="th"?"active":""}">ไทย</button><button data-setting="language" data-value="en" class="${lang()==="en"?"active":""}">English</button></div></div>
   <div class="settings-row"><span>${t("appearance")}</span><div class="segmented" style="width:220px">${["system","light","dark"].map(k=>`<button data-setting="appearance" data-value="${k}" class="${state.settings.appearance===k?"active":""}">${t(k)}</button>`).join("")}</div></div>
   <div style="padding-top:13px"><div class="muted small" style="margin-bottom:9px">${t("color")}</div><div class="grid-2">${Object.entries(colors).map(([k,c])=>`<button class="btn ${state.settings.theme===k?"":"secondary"}" data-setting="theme" data-value="${k}" style="display:flex;align-items:center;justify-content:center;gap:8px"><i class="color-dot" style="background:${c}"></i>${t(k)}</button>`).join("")}</div></div></section>
-  <section class="card section"><h2 class="title-icon">${icon("shield")} ${t("backup")}</h2><p class="muted small">${t("privacy")}</p><div class="grid-2"><button class="btn secondary with-icon" data-action="export">${icon("download",18)}${t("export")}</button><button class="btn secondary with-icon" data-action="import">${icon("upload",18)}${t("import")}</button></div><button class="btn ghost with-icon" style="width:100%;margin-top:10px" data-action="persist-storage" ${persistence?"disabled":""}>${icon("shield",18)}${persistence?t("storageOn"):t("storageOff")}</button><input id="import-file" class="hidden" type="file" accept="application/json"></section>
+  <section class="card section"><h2 class="title-icon">${icon("shield")} ${t("backup")}</h2><p class="muted small">${t("privacy")} · ${tr("กู้คืนไฟล์ได้สูงสุด 32 MiB","Restore files up to 32 MiB")}</p><div class="grid-2"><button class="btn secondary with-icon" data-action="export">${icon("download",18)}${t("export")}</button><button class="btn secondary with-icon" data-action="import">${icon("upload",18)}${t("import")}</button></div><button class="btn ghost with-icon" style="width:100%;margin-top:10px" data-action="persist-storage" ${persistence?"disabled":""}>${icon("shield",18)}${persistence?t("storageOn"):t("storageOff")}</button><input id="import-file" class="hidden" type="file" accept="application/json"></section>
   <section class="card section"><h2 class="title-icon">${icon("download")} ${t("install")}</h2><p>${t("installHelp")}</p><div class="notice">${lang()==="th"?"หลังติดตั้ง เปิดได้จากหน้าจอโฮมและใช้ได้แม้ไม่มีอินเทอร์เน็ต":"After installation, open it from the Home Screen and use it offline."}</div></section>`;
-  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.2 · 2026.11.11</span></section>`;
+  body+=`<section class="card section"><h2>${tr("พักระหว่างเซต","Rest between sets")}</h2>${trainingControls(null)}<p class="small muted">${tr("อัตโนมัติ: เบา/ปานกลาง 60 วิ · หนัก 90 วิ เวลานับต่อเมื่อกลับเข้าแอป ไม่มีการแจ้งเตือนบนหน้าจอล็อก","Auto: light/moderate 60s · heavy 90s. Rest resumes correctly when you return. No lock-screen alerts.")}</p><span class="muted small">LiftLog PWA · 2.2.1 · 2026.11.12</span></section>`;
   body+=`<section class="card section"><div class="section-head"><h2>${tr('ท่าของฉัน','My exercises')}</h2><button class="btn secondary small-btn" data-action="new-exercise">${tr('สร้างท่าเอง','Create exercise')}</button></div>${user().exercises.filter(e=>e.custom).map(e=>`<div class="settings-row"><b>${escapeHTML(exerciseOptionName(e))}</b></div>`).join('')||`<p class="small muted">${tr('สร้างท่าแล้วเลือกใช้ได้ในทุกแผนของโปรไฟล์นี้','Create exercises to use in any plan in this profile.')}</p>`}</section>`;
   return shell(body);
 }
@@ -371,7 +379,7 @@ function planEditor(dayIndex, todayOnly=false) {
 
 function dayEditorBody(day) {
   if(day.mode==="rest") return `<div class="empty"><div class="empty-icon">${icon("rest",34)}</div>${t("rest")}</div>`;
-  if(day.mode==="cardio") return `<label class="field"><span>${t("activity")}</span><select name="activity">${Object.entries(CARDIO).map(([k,v])=>`<option value="${k}" ${day.cardio?.activity===k?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></label><label class="field"><span>${t("duration")} (${t("minutes")})</span><input name="minutes" type="number" min="1" value="${day.cardio?.minutes||30}"></label><label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${day.cardio?.treadmill?"checked":""}>${t("treadmill")}</label><div class="grid-2"><label class="field"><span>${t("speed")}</span><input name="speed" type="number" step="0.1" value="${day.cardio?.speed||5}"></label><label class="field"><span>${t("incline")}</span><input name="incline" type="number" step="0.5" value="${day.cardio?.incline||0}"></label></div>`;
+  if(day.mode==="cardio") return `<label class="field"><span>${t("activity")}</span><select name="activity">${Object.entries(CARDIO).map(([k,v])=>`<option value="${k}" ${day.cardio?.activity===k?"selected":""}>${lang()==="th"?v.th:v.en}</option>`).join("")}</select></label><label class="field"><span>${t("duration")} (${t("minutes")})</span><input name="minutes" type="number" min="1" value="${Number(day.cardio?.minutes||30)}"></label><label class="row" style="justify-content:flex-start"><input name="treadmill" type="checkbox" style="width:20px;min-height:20px" ${day.cardio?.treadmill?"checked":""}>${t("treadmill")}</label><div class="grid-2"><label class="field"><span>${t("speed")}</span><input name="speed" type="number" step="0.1" value="${Number(day.cardio?.speed||5)}"></label><label class="field"><span>${t("incline")}</span><input name="incline" type="number" step="0.5" value="${Number(day.cardio?.incline||0)}"></label></div>`;
   const list=day.exercises||[];
   return `<div class="stack" data-exercise-list>${list.map((x,i)=>exerciseEditorRow(x,i)).join("")}</div><button type="button" class="btn ghost with-icon" data-action="add-editor-exercise">${icon("plus",18)}${t("addExercise")}</button><details class="custom-exercise"><summary>${tr("สร้างท่าเอง","Create exercise")}</summary><div class="stack" data-custom-fields>${customExerciseFields()}<button type="button" class="btn secondary" data-action="create-editor-exercise">${tr("สร้างและเพิ่มในวันนี้","Create and add to this day")}</button></div></details>`;
 }
@@ -402,7 +410,7 @@ function profilesModal() {
 async function startSession() {
   if(user().activeSession)return;
   const {plan,day}=resolveDay(user());
-  user().activeSession={id:uid("session"),kind:day.mode,startedAt:new Date().toISOString(),intensity:user().defaultIntensity||"moderate",bodyWeight:user().bodyWeight,planName:plan?.name||"",planned:structuredClone(day.exercises||[]),sets:[],feedback:{},...(day.cardio||{})};
+  user().activeSession={id:uid("session"),kind:day.mode,startedAt:new Date().toISOString(),intensity:user().defaultIntensity||"moderate",bodyWeight:user().bodyWeight,planName:plan?.name||"",planned:structuredClone(day.exercises||[]),sets:[],feedback:{},...(day.mode==='cardio'?cardioInputs(day.cardio):{})};
   await persist(true); toast(t("sessionStarted"));
 }
 
@@ -420,7 +428,9 @@ on("click",async event=>{
   const el=event.target.closest("[data-action],[data-setting]"); if(!el)return;
   openingControl = el;
   const action=el.dataset.action;
-  if(action==='confirm-import'){if(!pendingImport)return;state=pendingImport;await persist();pendingImport=null;entryDrafts.clear();closeModal();draw();toast(t('imported'));return;}
+  if(action==='confirm-import'){if(!pendingImport)return;state=pendingImport;
+    // Prove the launch and restore views can be built before replacing the durable journal.
+    renderToday();renderSettings();await persist();pendingImport=null;entryDrafts.clear();closeModal();draw();toast(t('imported'));return;}
   if(action==='rest-extend'){extendRest(user());await persist();tickRest();return;}
   if(action==='rest-skip'){user().restTimer=null;await persist(true);return;}
   if(action==='apply-update'){
@@ -464,7 +474,7 @@ on("click",async event=>{
   if(action==="print") { window.print(); return; }
   if(action==="switch-user") { state.activeUserId=el.dataset.user; selectedPlanId=null; closeModal(); await persist(true); return; }
   if(action==="new-user") { showModal(t("addUser"),`<form class="stack" data-form="new-user"><label class="field"><span>${t("userName")}</span><input name="name" required autofocus></label><label class="field"><span>${t("bodyWeight")} (${t("kg")})</span><input name="bodyWeight" type="number" min="20" value="70"></label><button class="btn">${t("save")}</button></form>`); return; }
-  if(action==="export") { const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`LiftLog-backup-${localDateKey()}.json`;a.click();URL.revokeObjectURL(a.href);toast(t("exported"));return; }
+  if(action==="export") { downloadJournal(state);toast(t("exported"));return; }
   if(action==="import") { document.querySelector("#import-file").click();return; }
   if(action==="persist-storage") { persistence=await requestPersistentStorage();draw();toast(persistence?t("storageOn"):t("storageOff"));return; }
   if(el.dataset.setting) {
@@ -496,9 +506,10 @@ on("change",async event=>{
   if(event.target.matches('[data-setting="bodyWeight"]')){user().bodyWeight=Number(event.target.value)||70;await persist();return;}
   if(event.target.id==="import-file"&&event.target.files[0]){
     try{
-      pendingImport=normalizeState(JSON.parse(await event.target.files[0].text()));
+      if (event.target.files[0].size > MAX_IMPORT_BYTES) {pendingImport=null;showActionError(tr('ไฟล์สำรองเกิน 32 MiB ข้อมูลเดิมยังอยู่','Backup exceeds 32 MiB. Existing data is unchanged.'));return;}
+      pendingImport=normalizeState(JSON.parse(await event.target.files[0].text()),{importing:true});
       showModal(t('import'),`<p>${tr('ไฟล์นี้มี','This backup contains')} <b>${pendingImport.users.length}</b> ${t('profiles')} · <b>${pendingImport.users.reduce((n,u)=>n+u.sessions.length,0)}</b> ${t('sessions')}</p><p>${tr('การกู้คืนจะแทนที่ข้อมูลทั้งหมดในแอปนี้ ควรดาวน์โหลดสำรองปัจจุบันก่อน','Restoring replaces all data in this app. Download your current backup first.')}</p><div class="stack"><button class="btn secondary" data-action="export">${t('export')}</button><button class="btn" data-action="confirm-import">${t('import')}</button><button class="btn ghost" data-action="close-modal">${t('cancel')}</button></div>`);
-    }catch{pendingImport=null;toast(tr('ไฟล์สำรองไม่ถูกต้อง','Invalid backup file'));}
+    }catch{pendingImport=null;showActionError(tr('ไฟล์สำรองไม่ถูกต้อง ข้อมูลเดิมยังอยู่','Invalid backup file. Existing data is unchanged.'));} finally {event.target.value='';}
 
   }
 });
@@ -539,7 +550,7 @@ function on(type,handler){
     busy=true;
     try{await handler(event);}catch(error){
       if(savedState)state=structuredClone(savedState);
-      showActionError(error.message?.startsWith('invalid-') ? tr('ตรวจน้ำหนักและจำนวนครั้งอีกครั้ง','Check the weight and reps') : tr('บันทึกไม่สำเร็จ ข้อมูลที่บันทึกก่อนหน้ายังอยู่ กรุณาลองอีกครั้ง','Save failed. Previously saved data remains. Please retry.'));
+      showActionError(error.message==='stale-state' ? tr('อีกแท็บบันทึกข้อมูลใหม่แล้ว การแก้ไขนี้ยังไม่ได้บันทึก โปรดโหลดหน้านี้ใหม่ก่อนบันทึกอีกครั้ง','Another tab saved new data. This change was not saved. Reload this page before trying again.') : error.message?.startsWith('invalid-') ? tr('ตรวจน้ำหนักและจำนวนครั้งอีกครั้ง','Check the weight and reps') : tr('บันทึกไม่สำเร็จ ข้อมูลที่บันทึกก่อนหน้ายังอยู่ กรุณาลองอีกครั้ง','Save failed. Previously saved data remains. Please retry.'));
     }finally{busy=false;}
   });
 }
@@ -577,15 +588,24 @@ document.addEventListener('input',event=>{
 setInterval(()=>{if(!state || document.hidden)return;tickRest();const el=document.querySelector('[data-workout-time]');if(el&&user().activeSession)el.textContent=elapsed(user().activeSession.startedAt);},1000);
 document.addEventListener('visibilitychange',()=>{if(state)tickRest();});
 async function boot() {
+  let stored=null;
   try {
-    const stored=await loadState();
+    let snapshot=await loadSnapshot();stored=snapshot.state;revision=snapshot.revision;
     state=normalizeState(stored===null?createInitialState():stored);
-    // Render first. A malformed existing record must never trigger an empty reset.
-    applyTheme();draw();
-    await saveState(state);savedState=structuredClone(state);
+    if (stored===null) {
+      try { revision=await saveState(state,revision); }
+      catch (error) {
+        if (error.message!=="stale-state") throw error;
+        snapshot=await loadSnapshot(); stored=snapshot.state; revision=snapshot.revision;
+        state=normalizeState(stored);
+      }
+    }
+    savedState=structuredClone(state); applyTheme();draw();
   } catch {
     state=null;
-    root.innerHTML='<main class="boot"><h1>LiftLog</h1><p>เปิดข้อมูลไม่สำเร็จ / Could not open saved data</p><p>ข้อมูลเดิมยังไม่ถูกแทนที่ด้วยข้อมูลใหม่ / Your data has not been reset.</p><button class="btn" onclick="location.reload()">ลองอีกครั้ง / Retry</button></main>';return;
+    root.innerHTML=`<main class="boot"><h1>LiftLog</h1><p>เปิดข้อมูลไม่สำเร็จ / Could not open saved data</p><p>ข้อมูลเดิมยังไม่ถูกแทนที่ด้วยข้อมูลใหม่ / Your data has not been reset.</p>${stored!==null?'<button class="btn secondary" data-boot-export>ดาวน์โหลดข้อมูลเดิม / Download original data</button>':''}<button class="btn" data-boot-retry>ลองอีกครั้ง / Retry</button></main>`;
+    root.querySelector('[data-boot-export]')?.addEventListener('click',()=>downloadJournal(stored,'recovery'));
+    root.querySelector('[data-boot-retry]').addEventListener('click',()=>location.reload());return;
   }
   persistence=await isStoragePersistent().catch(()=>false);
   if('serviceWorker' in navigator){

@@ -61,3 +61,9 @@ python3 -m http.server 4173
 ## Regression checks
 
 With Node 22.16+ run `node --test tests/*.test.mjs`. For the browser checks, serve this directory on loopback (`python3 -m http.server 4180 --bind 127.0.0.1`). With Playwright and its browsers installed in your development environment, run `node tests/ui.cjs` and `BROWSER=webkit node tests/ui.cjs`. Use `PLAYWRIGHT_MODULE` for a separate test installation and `AXE_MODULE` for the path to axe.min.js to include automated WCAG checks. Tests use disposable profiles with synthetic workouts; the app has no runtime package dependencies.
+
+### 2.2.1 · 12 November 2026
+
+กู้คืนไฟล์ JSON ได้สูงสุด 32 MiB แอปตรวจข้อมูลก่อนแสดงปุ่มยืนยัน หากไฟล์ไม่ผ่าน ข้อมูลเดิมจะยังอยู่ เมื่อสองแท็บเปิดสมุดบันทึกเดียวกัน แท็บที่ข้อมูลเก่าจะเตือนให้โหลดใหม่ก่อนบันทึก หากอ่านข้อมูลเดิมได้แต่เปิดหน้าจอไม่ได้ สามารถดาวน์โหลดสำเนาข้อมูลเดิมจากหน้ากู้คืนได้
+
+For the restore and concurrent-tab regression flow run `node tests/restore-ui.cjs` against the same loopback server as the UI tests.
